@@ -6339,6 +6339,15 @@ pub(super) fn render_settings_popup(
         appearance,
         theme,
     ));
+    popup_col.add_child(render_show_toggle_option(
+        "Estado de puente (barra superior)",
+        *tab_settings.show_puente_status_chip,
+        state.show_puente_status_chip_mouse_state.clone(),
+        WorkspaceAction::ToggleShowPuenteStatusChip,
+        None,
+        appearance,
+        theme,
+    ));
     popup_col.add_child(make_divider(theme));
     popup_col.add_child(view_as_header);
     popup_col.add_child(view_as_segmented_control_row);
