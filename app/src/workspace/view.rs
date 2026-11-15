@@ -30296,3 +30296,19 @@ fn set_opencode_warp_plugin(new_entry: &str) -> String {
         Err(e) => format!("Failed to serialize opencode.json: {e}"),
     }
 }
+
+/// CSS fork: whether a restored window holds nothing but one plain terminal tab with no Claude
+/// Code conversation to resume and no custom title, so it can start with Claude instead.
+fn is_lone_plain_terminal(window_snapshot: &crate::app_state::WindowSnapshot) -> bool {
+    let [tab] = window_snapshot.tabs.as_slice() else {
+        return false;
+    };
+    tab.custom_title.is_none()
+        && matches!(
+            &tab.root,
+            crate::app_state::PaneNodeSnapshot::Leaf(crate::app_state::LeafSnapshot {
+                contents: crate::app_state::LeafContents::Terminal(terminal),
+                ..
+            }) if terminal.claude_code_resume.is_none()
+        )
+}
