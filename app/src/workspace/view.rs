@@ -25787,7 +25787,6 @@ impl TypedActionView for Workspace {
                     let new_value = !*settings.show_puente_status_chip.value();
                     let _ = settings.show_puente_status_chip.set_value(new_value, ctx);
                 });
-                self.restart_puente_poller(ctx);
                 ctx.notify();
             }
             ToggleAgentManagementView => {
