@@ -136,9 +136,6 @@ fn scan_head(file: &mut File) -> HeadScan {
             scan.cwd = value_cwd(&value);
         }
         if let Some(prompt) = user_prompt(&value) {
-            if scan.cwd.is_none() {
-                scan.cwd = value_cwd(&value);
-            }
             scan.first_prompt = Some(prompt);
             break;
         }
