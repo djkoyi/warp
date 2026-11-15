@@ -1229,7 +1229,16 @@ impl AgentInputFooter {
                 return None;
             }
 
-            let session = CLIAgentSessionsModel::as_ref(app).session(self.terminal_view_id)?;
+            let sessions = CLIAgentSessionsModel::as_ref(app);
+            let session = sessions.session(self.terminal_view_id)?;
+            // The meters bridge's hooks report the same lifecycle events as the plugin, without a
+            // plugin version, so the install/update chips would be misleading.
+            if sessions
+                .meters(self.terminal_view_id)
+                .is_some_and(|meters| meters.bridge_connected)
+            {
+                return None;
+            }
 
             let manager = plugin_manager_for(session.agent)?;
             let min_version = manager.minimum_plugin_version();

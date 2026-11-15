@@ -2,6 +2,7 @@ pub(crate) mod agent_cli_launch_modal;
 pub(crate) mod auto_handoff_sleep_modal;
 mod build_plan_migration_modal;
 pub(crate) mod chatgpt_plan_modal;
+pub(crate) mod cli_agent_overview_modal;
 pub(crate) mod cloud_agent_capacity_modal;
 pub(crate) mod codex_modal;
 pub mod conversation_list;
@@ -392,7 +393,9 @@ use crate::terminal::available_shells::AvailableShells;
 use crate::terminal::block_list_viewport::InputMode;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{PluginModalKind, plugin_manager_for};
-use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
+use crate::terminal::cli_agent_sessions::{
+    CLIAgentSessionsModel, CLIAgentSessionsModelEvent, meters_ui,
+};
 use crate::terminal::enable_auto_reload_modal::{
     EnableAutoReloadModal, EnableAutoReloadModalEvent,
 };
@@ -520,6 +523,9 @@ use crate::workspace::view::build_plan_migration_modal::{
     BuildPlanMigrationModal, BuildPlanMigrationModalEvent,
 };
 use crate::workspace::view::chatgpt_plan_modal::{ChatGPTPlanModal, ChatGPTPlanModalEvent};
+use crate::workspace::view::cli_agent_overview_modal::{
+    CLIAgentOverviewEvent, CLIAgentOverviewModal, CLIAgentOverviewRow,
+};
 use crate::workspace::view::cloud_agent_capacity_modal::{
     CloudAgentCapacityModal, CloudAgentCapacityModalEvent, CloudAgentCapacityModalVariant,
 };
@@ -1158,6 +1164,7 @@ pub struct Workspace {
     enable_auto_reload_modal: ViewHandle<EnableAutoReloadModal>,
     build_plan_migration_modal: ViewHandle<BuildPlanMigrationModal>,
     codex_modal: ViewHandle<CodexModal>,
+    cli_agent_overview_modal: ViewHandle<CLIAgentOverviewModal>,
     cloud_agent_capacity_modal: ViewHandle<CloudAgentCapacityModal>,
     free_ai_removal_modal: ViewHandle<FreeAiRemovalModal>,
     /// Second instance of the free-AI-removal modal, opened on demand when a
@@ -3019,6 +3026,11 @@ impl Workspace {
             me.handle_codex_modal_event(event, ctx);
         });
 
+        let cli_agent_overview_modal = ctx.add_typed_action_view(|_| CLIAgentOverviewModal::new());
+        ctx.subscribe_to_view(&cli_agent_overview_modal, |me, _, event, ctx| {
+            me.handle_cli_agent_overview_event(event, ctx);
+        });
+
         let cloud_agent_capacity_modal =
             ctx.add_typed_action_view(|_| CloudAgentCapacityModal::new());
         ctx.subscribe_to_view(&cloud_agent_capacity_modal, |me, _, event, ctx| {
@@ -3579,6 +3591,7 @@ impl Workspace {
             notification_mailbox_view,
             notification_toast_stack,
             codex_modal,
+            cli_agent_overview_modal,
             cloud_agent_capacity_modal,
             free_ai_removal_modal,
             prompt_suggestions_unavailable_modal,
@@ -3800,8 +3813,12 @@ impl Workspace {
                 | CLIAgentSessionsModelEvent::StatusChanged { .. }
                 | CLIAgentSessionsModelEvent::Ended { .. }
                 | CLIAgentSessionsModelEvent::SessionUpdated { .. }
+                | CLIAgentSessionsModelEvent::MetersUpdated { .. }
         ) && self.workspace_contains_terminal_view(event.terminal_view_id(), ctx)
         {
+            if self.current_workspace_state.is_cli_agent_overview_open {
+                self.refresh_cli_agent_overview(ctx);
+            }
             ctx.notify();
         }
     }
@@ -19731,6 +19748,98 @@ impl Workspace {
         });
     }
 
+    fn handle_cli_agent_overview_event(
+        &mut self,
+        event: &CLIAgentOverviewEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.current_workspace_state.is_cli_agent_overview_open = false;
+        match event {
+            CLIAgentOverviewEvent::Close => self.focus_active_tab(ctx),
+            CLIAgentOverviewEvent::FocusPane(locator) => self.focus_pane(*locator, ctx),
+        }
+        ctx.notify();
+    }
+
+    /// Every CLI agent session in this window's tabs, in tab order.
+    fn cli_agent_overview_rows(&self, ctx: &AppContext) -> Vec<CLIAgentOverviewRow> {
+        let sessions = CLIAgentSessionsModel::as_ref(ctx);
+        let mut rows = Vec::new();
+        for tab in &self.tabs {
+            let pane_group = tab.pane_group.as_ref(ctx);
+            let tab_title = pane_group.display_title(ctx);
+            for pane_id in pane_group.terminal_pane_ids() {
+                let Some(terminal_view) = pane_group.terminal_view_from_pane_id(pane_id, ctx)
+                else {
+                    continue;
+                };
+                let terminal_view_id = terminal_view.id();
+                let Some(session) = sessions.session(terminal_view_id) else {
+                    continue;
+                };
+                let meters = sessions.meters(terminal_view_id);
+                let snapshot = meters.and_then(|meters| meters.snapshot.as_ref());
+                rows.push(CLIAgentOverviewRow {
+                    locator: PaneViewLocator {
+                        pane_group_id: tab.pane_group.id(),
+                        pane_id,
+                    },
+                    tab_title: tab_title.clone(),
+                    agent: session.agent,
+                    activity: meters_ui::session_activity(session, meters),
+                    model_name: snapshot.and_then(|s| s.model_name.clone()),
+                    context_used_pct: snapshot.and_then(|s| s.context_used_pct),
+                    context_window_size: snapshot.and_then(|s| s.context_window_size),
+                    cost_usd: snapshot.and_then(|s| s.cost_usd),
+                });
+            }
+        }
+        rows
+    }
+
+    fn refresh_cli_agent_overview(&mut self, ctx: &mut ViewContext<Self>) {
+        let rows = self.cli_agent_overview_rows(ctx);
+        self.cli_agent_overview_modal
+            .update(ctx, |modal, ctx| modal.set_rows(rows, ctx));
+    }
+
+    pub fn toggle_cli_agent_overview(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.current_workspace_state.is_cli_agent_overview_open {
+            self.current_workspace_state.is_cli_agent_overview_open = false;
+            self.focus_active_tab(ctx);
+        } else {
+            self.refresh_cli_agent_overview(ctx);
+            self.current_workspace_state.is_cli_agent_overview_open = true;
+            ctx.focus(&self.cli_agent_overview_modal);
+        }
+        ctx.notify();
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn install_claude_meters_bridge(&mut self, ctx: &mut ViewContext<Self>) {
+        use crate::terminal::cli_agent_sessions::meters_bridge;
+
+        let toast = match meters_bridge::install() {
+            Ok(report) => {
+                let chained = report
+                    .chained_status_line
+                    .map(|previous| format!(" Your status line ({previous}) still runs."))
+                    .unwrap_or_default();
+                DismissibleToast::success(format!(
+                    "Claude Code meters bridge installed in {}.{chained} Restart Claude Code \
+                     sessions to load it.",
+                    report.settings_path.display()
+                ))
+            }
+            Err(err) => DismissibleToast::error(format!(
+                "Could not install the Claude Code meters bridge: {err:#}"
+            )),
+        };
+        self.toast_stack.update(ctx, |toast_stack, ctx| {
+            toast_stack.add_ephemeral_toast(toast, ctx)
+        });
+    }
+
     /// Opens the Codex modal.
     pub fn open_codex_modal(&mut self, ctx: &mut ViewContext<Self>) {
         self.current_workspace_state.is_codex_modal_open = true;
@@ -23702,6 +23811,14 @@ impl Workspace {
                 .set
                 .insert(flags::AUTO_DISMISS_RICH_INPUT_AFTER_SUBMIT_FLAG);
         }
+        if *ai_settings.show_cli_agent_meters.value() {
+            context.set.insert(flags::CLI_AGENT_METERS_ENABLED);
+        }
+        if *ai_settings.notify_cli_agent_background_tabs.value() {
+            context
+                .set
+                .insert(flags::CLI_AGENT_BACKGROUND_TAB_NOTIFICATIONS_ENABLED);
+        }
         if *ai_settings.show_agent_notifications.value() {
             context.set.insert(flags::AGENT_IN_APP_NOTIFICATIONS_FLAG);
         }
@@ -25746,6 +25863,11 @@ impl TypedActionView for Workspace {
                 if !self.focus_terminal_view_locally(*terminal_view_id, ctx) {
                     self.focus_terminal_view_in_other_window(*terminal_view_id, ctx);
                 }
+            }
+            ToggleCLIAgentOverview => self.toggle_cli_agent_overview(ctx),
+            InstallClaudeMetersBridge => {
+                #[cfg(not(target_family = "wasm"))]
+                self.install_claude_meters_bridge(ctx);
             }
             FocusPane(locator) => {
                 self.focus_pane(*locator, ctx);
@@ -27860,6 +27982,10 @@ impl View for Workspace {
 
         if self.current_workspace_state.is_codex_modal_open {
             stack.add_child(ChildView::new(&self.codex_modal).finish());
+        }
+
+        if self.current_workspace_state.is_cli_agent_overview_open {
+            stack.add_child(ChildView::new(&self.cli_agent_overview_modal).finish());
         }
 
         if FeatureFlag::CloudMode.is_enabled()

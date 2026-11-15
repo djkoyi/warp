@@ -1982,6 +1982,44 @@ define_settings_group!(AISettings, settings: [
         description: "When enabled, the Rich Input editor submits on Ctrl+Enter instead of Enter. Enter inserts a newline.",
     }
 
+    // Shows the usage meters (context, tokens, cost, plan limits, status) reported by the Claude
+    // Code meters bridge in the coding agent toolbar, tabs and sessions overview.
+    show_cli_agent_meters: ShowCLIAgentMeters {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "agents.third_party.show_meters",
+        description: "Whether to show coding agent usage meters (context, tokens, cost, plan limits) reported by the meters bridge.",
+    }
+
+    // Context-window usage (percent) at or above which the meters warn that compaction is near.
+    cli_agent_compaction_warning_threshold: CLIAgentCompactionWarningThreshold {
+        type: u8,
+        default: crate::terminal::cli_agent_sessions::meters::DEFAULT_COMPACTION_WARNING_THRESHOLD,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "agents.third_party.compaction_warning_threshold",
+        description: "Context window usage (percent, 1-100) at which coding agent meters warn that compaction is near.",
+    }
+
+    // Sends a desktop notification when a coding agent in a tab or pane that is not focused needs
+    // attention or finishes, not only when the whole window is in the background.
+    notify_cli_agent_background_tabs: NotifyCLIAgentBackgroundTabs {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "agents.third_party.notify_background_tabs",
+        description: "Whether to send a desktop notification when a coding agent in an unfocused tab or pane needs attention or finishes.",
+    }
+
     // Maps custom toolbar command regex patterns to specific CLI agents.
     // Keys are regex patterns matched against the full command string.
     // Values are serialized CLIAgent names (empty string = any agent).

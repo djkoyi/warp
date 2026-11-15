@@ -14421,8 +14421,11 @@ impl TerminalView {
             }
         }
 
-        // Desktop notifications — only when navigated away and not in-progress.
-        if !self.is_navigated_away_from_window(ctx)
+        // Desktop notifications — only when the session is out of view and not in-progress. With
+        // many agent tabs in one window, "out of view" includes another tab or pane having focus.
+        let is_in_unfocused_tab_or_pane = *AISettings::as_ref(ctx).notify_cli_agent_background_tabs
+            && !ctx.is_self_or_child_focused();
+        if !(self.is_navigated_away_from_window(ctx) || is_in_unfocused_tab_or_pane)
             || matches!(status, CLIAgentSessionStatus::InProgress)
         {
             return;

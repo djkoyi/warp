@@ -4,6 +4,7 @@ use serde::Deserialize;
 pub use warp_core::cli_agent_protocol::CLI_AGENT_NOTIFICATION_SENTINEL;
 use warp_errors::report_error;
 
+use super::meters::{CLIAgentMetersSnapshot, CompactTrigger};
 use crate::terminal::CLIAgent;
 
 #[cfg_attr(not(feature = "local_tty"), allow(dead_code))]
@@ -22,6 +23,11 @@ pub enum CLIAgentEventType {
     QuestionAsked,
     NeedsInput,
     IdlePrompt,
+    /// Usage meters from the Claude Code `statusLine` bridge. Not a turn boundary: it carries no
+    /// evidence that the agent is working or idle.
+    StatusLine,
+    PreCompact,
+    PostCompact,
     Unknown(String),
 }
 
@@ -52,6 +58,12 @@ pub struct CLIAgentEventPayload {
     /// wakes the agent again when any of them completes or fires, so a stop with pending work is
     /// a pause, not the end of the session. `None` when the plugin predates this field.
     pub pending_background_work_count: Option<u32>,
+    /// Set on `StatusLine` events.
+    pub meters: Option<CLIAgentMetersSnapshot>,
+    /// Set on `PreCompact` / `PostCompact` events.
+    pub compact_trigger: Option<CompactTrigger>,
+    /// Where the bridge backed up the transcript before compacting (`PreCompact` only).
+    pub backup_path: Option<String>,
 }
 
 impl CLIAgentEventPayload {

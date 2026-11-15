@@ -4704,7 +4704,8 @@ impl AgentDriver {
                 }
                 CLIAgentSessionsModelEvent::Started { .. }
                 | CLIAgentSessionsModelEvent::InputSessionChanged { .. }
-                | CLIAgentSessionsModelEvent::Ended { .. } => {}
+                | CLIAgentSessionsModelEvent::Ended { .. }
+                | CLIAgentSessionsModelEvent::MetersUpdated { .. } => {}
             });
     }
     /// Drives the harness exit signal from the status of the driver's bound native conversation,

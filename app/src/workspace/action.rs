@@ -548,6 +548,10 @@ pub enum WorkspaceAction {
     },
     /// Focus a specific pane by its locator (pane_group_id and pane_id).
     FocusPane(PaneViewLocator),
+    /// Show or hide the overview of CLI agent sessions (context, cost, status per tab).
+    ToggleCLIAgentOverview,
+    /// Install the Claude Code meters bridge script into the Claude config directory.
+    InstallClaudeMetersBridge,
     /// Start a new AI conversation in a terminal view. This sets the pending query state
     /// to default and focuses the terminal view.
     StartNewConversation {
@@ -1162,6 +1166,8 @@ impl WorkspaceAction {
             | OpenMCPServerCollection
             | FocusTerminalViewInWorkspace { .. }
             | FocusPane(..)
+            | ToggleCLIAgentOverview
+            | InstallClaudeMetersBridge
             | ShiftSelectTabRange { .. }
             | ToggleTabMultiSelection { .. }
             | ClearTabMultiSelection

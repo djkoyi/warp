@@ -298,7 +298,8 @@ impl LocalAgentTaskSyncModel {
             CLIAgentSessionsModelEvent::Started { .. }
             | CLIAgentSessionsModelEvent::InputSessionChanged { .. }
             | CLIAgentSessionsModelEvent::Ended { .. }
-            | CLIAgentSessionsModelEvent::SessionUpdated { .. } => {}
+            | CLIAgentSessionsModelEvent::SessionUpdated { .. }
+            | CLIAgentSessionsModelEvent::MetersUpdated { .. } => {}
         }
     }
 

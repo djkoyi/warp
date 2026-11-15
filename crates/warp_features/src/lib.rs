@@ -630,6 +630,10 @@ pub enum FeatureFlag {
     /// External programs can trigger system and in-app notifications.
     PluggableNotifications,
 
+    /// Usage meters (context window, tokens, cost, plan limits, compaction, status) for CLI
+    /// agents, fed by the Claude Code meters bridge over the `warp://cli-agent` OSC channel.
+    CLIAgentMeters,
+
     /// Dev-only: simulate a GitHub-unauthed user in the Environments page flow.
     ///
     /// This is intended for developer testing and should have no effect in release builds.
