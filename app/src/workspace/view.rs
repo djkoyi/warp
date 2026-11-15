@@ -3612,6 +3612,8 @@ impl Workspace {
             cli_agent_overview_modal,
             rendered_tab_meter_segments: HashMap::new(),
             rendered_global_meter_segments: Vec::new(),
+            puente_status: PuenteStatus::default(),
+            puente_poll_generation: 0,
             cloud_agent_capacity_modal,
             free_ai_removal_modal,
             prompt_suggestions_unavailable_modal,
