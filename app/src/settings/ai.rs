@@ -209,8 +209,10 @@ impl VoiceInputToggleKey {
 
     pub fn to_key_code(&self) -> Option<KeyCode> {
         match self {
-            VoiceInputToggleKey::None => None,
-            VoiceInputToggleKey::Fn => Some(KeyCode::Fn),
+            // Fn/globe is reserved for macOS system dictation: binding it here would start Warp's
+            // own voice input on every press, competing with dictation for the microphone and
+            // typing the transcript twice.
+            VoiceInputToggleKey::None | VoiceInputToggleKey::Fn => None,
             VoiceInputToggleKey::AltLeft => Some(KeyCode::AltLeft),
             VoiceInputToggleKey::AltRight => Some(KeyCode::AltRight),
             VoiceInputToggleKey::ControlLeft => Some(KeyCode::ControlLeft),
@@ -2670,7 +2672,8 @@ impl AISettings {
     /// If the user hasn't explicitly interacted with voice yet:
     /// - Sets the default voice input toggle key based on the OS
     /// - Marks `explicitly_interacted_with_voice` as true
-    /// - Returns `Some(toggle_key)` so the caller can show a toast
+    /// - Returns `Some(toggle_key)` so the caller can show a toast, or `None` if the OS default is
+    ///   no toggle key
     ///
     /// If the user has already interacted with voice, returns `None`.
     pub fn maybe_setup_first_time_voice(
@@ -2682,7 +2685,8 @@ impl AISettings {
         }
 
         let voice_input_toggle_key = match OperatingSystem::get() {
-            OperatingSystem::Mac => VoiceInputToggleKey::Fn,
+            // Fn is left to macOS system dictation.
+            OperatingSystem::Mac => VoiceInputToggleKey::None,
             OperatingSystem::Windows | OperatingSystem::Linux | OperatingSystem::Other(_) => {
                 VoiceInputToggleKey::AltRight
             }
@@ -2695,7 +2699,7 @@ impl AISettings {
 
         report_if_error!(self.explicitly_interacted_with_voice.set_value(true, ctx));
 
-        Some(voice_input_toggle_key)
+        (!voice_input_toggle_key.is_none()).then_some(voice_input_toggle_key)
     }
 
     pub fn add_cli_agent_footer_enabled_command(
