@@ -396,6 +396,7 @@ use crate::terminal::available_shells::AvailableShell;
 use crate::terminal::available_shells::AvailableShells;
 use crate::terminal::block_list_viewport::InputMode;
 use crate::terminal::claude_code_resume::ClaudeCodeResume;
+use crate::terminal::cli_agent_sessions::meters::now_epoch_secs;
 use crate::terminal::cli_agent_sessions::meters_ui::{self, MeterSegment};
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{PluginModalKind, plugin_manager_for};
