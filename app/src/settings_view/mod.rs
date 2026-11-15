@@ -85,6 +85,7 @@ mod billing_and_usage;
 mod billing_and_usage_dispatch;
 mod billing_and_usage_page;
 mod billing_and_usage_page_v2;
+pub(crate) mod claude_code;
 mod cli_agents_page;
 mod code_editor_review_page;
 mod code_indexing_page;
