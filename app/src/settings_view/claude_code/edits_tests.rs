@@ -86,7 +86,12 @@ fn create_edit_and_delete_skill() {
     )
     .unwrap();
     let text = fs::read_to_string(&path).unwrap();
-    assert!(text.contains("allowed-tools: Bash(git:*)"));
+    // serde_yaml may quote values such as `Bash(git:*)`; compare the parsed value.
+    assert_eq!(
+        parse_markdown(&text).unwrap().get("allowed-tools").as_deref(),
+        Some("Bash(git:*)"),
+        "{text}"
+    );
     assert!(text.contains("description: Ship faster"));
     assert!(text.ends_with("New steps\n"));
     assert_eq!(backup_count(&fx.paths), 1);
