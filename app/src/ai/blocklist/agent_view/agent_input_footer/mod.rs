@@ -1261,7 +1261,9 @@ impl AgentInputFooter {
                 {
                     return None;
                 }
-                return Some(PluginChipKind::Update);
+                // CSS fork: no "Update Warp plugin" nag; the installed plugin keeps working.
+                let _ = PluginChipKind::Update;
+                return None;
             }
 
             // For agents without auto-install, wait for the debounce timer
