@@ -21,7 +21,7 @@ use crate::editor::EditorElement;
 use crate::server::server_api::TranscribeError;
 use crate::server::team_scope::RequestTeamScope;
 use crate::server::telemetry::TelemetryEvent;
-use crate::settings::{AISettings, VoiceInputToggleKey};
+use crate::settings::AISettings;
 use crate::themes::theme::Fill;
 use crate::ui_components::buttons::{icon_button, icon_button_with_color};
 use crate::ui_components::icons;
@@ -566,7 +566,7 @@ impl EditorView {
         let modifier_key = AISettings::handle(app).as_ref(app).voice_input_toggle_key;
         let tooltip_text = if mic_access_denied {
             "Voice transcription is disabled because Microphone access was not granted.".to_string()
-        } else if modifier_key == VoiceInputToggleKey::None {
+        } else if modifier_key.to_key_code().is_none() {
             "Voice transcription".to_string()
         } else {
             format!(

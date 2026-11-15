@@ -161,18 +161,11 @@ settings::macros::implement_setting_for_enum!(
 
 impl VoiceInputToggleKey {
     pub fn all_possible_values() -> Vec<VoiceInputToggleKey> {
-        let all_keys = VoiceInputToggleKey::iter().collect();
-        match OperatingSystem::get() {
-            OperatingSystem::Mac => all_keys,
-            // For non-Mac platforms, we exclude the `Fn` key since it may not be correctly identified by winit.
-            // In particular, we saw it is unidentified for a ThinkPad with a standard keyboard.
-            OperatingSystem::Windows | OperatingSystem::Linux | OperatingSystem::Other(_) => {
-                all_keys
-                    .into_iter()
-                    .filter(|key| *key != VoiceInputToggleKey::Fn)
-                    .collect()
-            }
-        }
+        // Fn is never offered: on macOS it belongs to system dictation (see `to_key_code`), and on
+        // other platforms winit may not identify it (e.g. unidentified on a ThinkPad keyboard).
+        VoiceInputToggleKey::iter()
+            .filter(|key| *key != VoiceInputToggleKey::Fn)
+            .collect()
     }
 
     /// Display name for choosing key from the AI settings page.
@@ -231,11 +224,7 @@ impl VoiceInputToggleKey {
         use warpui::keymap::Keystroke;
 
         let keystroke = match self {
-            VoiceInputToggleKey::None => return None,
-            VoiceInputToggleKey::Fn => Keystroke {
-                key: "fn".to_string(),
-                ..Default::default()
-            },
+            VoiceInputToggleKey::None | VoiceInputToggleKey::Fn => return None,
             VoiceInputToggleKey::AltLeft | VoiceInputToggleKey::AltRight => Keystroke {
                 alt: true,
                 ..Default::default()
@@ -1225,7 +1214,7 @@ impl settings_value::SettingsValue for ToolbarCommandMap {
 /// Default for Warp's own AI features (Agent Mode/Oz, suggestions, voice, "Use Agent" footer).
 /// This build is meant for third-party CLI agents only, so they are opt-in. Tests keep the
 /// upstream defaults so they continue to exercise the AI code paths.
-const WARP_AI_DEFAULT_ENABLED: bool = cfg!(any(test, feature = "integration_tests"));
+pub(crate) const WARP_AI_DEFAULT_ENABLED: bool = cfg!(any(test, feature = "integration_tests"));
 
 define_settings_group!(AISettings, settings: [
     // If `false`, all AI features are disabled.
@@ -1233,7 +1222,8 @@ define_settings_group!(AISettings, settings: [
         type: bool,
         default: WARP_AI_DEFAULT_ENABLED,
         supported_platforms: SupportedPlatforms::ALL,
-        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::No),
+        // Kept local so a value synced from another Warp install can't turn AI back on here.
+        sync_to_cloud: SyncToCloud::Never,
         surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "agents.warp_agent.is_any_ai_enabled",

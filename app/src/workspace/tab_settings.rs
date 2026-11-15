@@ -456,6 +456,9 @@ settings::macros::implement_setting_for_enum!(
     description: "Subtitle shown on compact vertical tabs.",
 );
 
+/// Tests look tabs up by their shell-derived title, so they keep the upstream naming.
+const AUTO_TAB_NAMES_DEFAULT: bool = !cfg!(any(test, feature = "integration_tests"));
+
 define_settings_group!(TabSettings, settings: [
     show_indicators: ShowIndicatorsButton {
         type: bool,
@@ -489,7 +492,7 @@ define_settings_group!(TabSettings, settings: [
     },
     auto_tab_names: AutoTabNames {
         type: bool,
-        default: true,
+        default: AUTO_TAB_NAMES_DEFAULT,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
         surface: settings::SettingSurfaces::GUI,

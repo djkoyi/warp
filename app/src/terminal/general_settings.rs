@@ -66,7 +66,7 @@ define_settings_group!(GeneralSettings, settings: [
         surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "general.claude_code.resume_flags",
-        description: "Extra arguments appended to `claude --resume <session>` when restoring a pane.",
+        description: "Extra arguments appended to `claude --resume <session>` when restoring a pane. Arguments are split on spaces, so a single value containing spaces is not supported.",
     },
     add_app_as_login_item: LoginItem {
         type: bool,

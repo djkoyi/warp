@@ -1,4 +1,4 @@
-use super::{ClaudeCodeResume, is_valid_session_id, quote_for_shell};
+use super::{ClaudeCodeResume, is_valid_session_id, project_dir_name, quote_for_shell};
 use crate::terminal::CLIAgent;
 use crate::terminal::cli_agent_sessions::{
     CLIAgentInputState, CLIAgentSession, CLIAgentSessionContext, CLIAgentSessionStatus,
@@ -128,8 +128,14 @@ fn quoting_neutralizes_quotes_per_shell() {
     assert_eq!(quote_for_shell("a'b", ShellType::Zsh), r#"'a'"'"'b'"#);
     assert_eq!(quote_for_shell("a'b", ShellType::Bash), r#"'a'"'"'b'"#);
     assert_eq!(quote_for_shell(r"a\'b", ShellType::Fish), r"'a\\\'b'");
-    assert_eq!(quote_for_shell("a\u{2019}b", ShellType::PowerShell), "'a\u{2019}\u{2019}b'");
-    assert_eq!(quote_for_shell("$(id) `x` $HOME", ShellType::Zsh), "'$(id) `x` $HOME'");
+    assert_eq!(
+        quote_for_shell("a\u{2019}b", ShellType::PowerShell),
+        "'a\u{2019}\u{2019}b'"
+    );
+    assert_eq!(
+        quote_for_shell("$(id) `x` $HOME", ShellType::Zsh),
+        "'$(id) `x` $HOME'"
+    );
 }
 
 #[test]
@@ -142,4 +148,38 @@ fn command_never_trusts_unvalidated_fields() {
         resume.command("", ShellType::Zsh),
         "claude --resume 'x; touch /tmp/pwned'"
     );
+}
+
+#[test]
+fn command_quotes_flags_starting_with_equals() {
+    assert_eq!(
+        resume(None).command("=ls --model=opus", ShellType::Zsh),
+        format!("claude --resume {SESSION_ID} '=ls' --model=opus")
+    );
+}
+
+#[test]
+fn project_dir_name_replaces_every_non_alphanumeric_char() {
+    assert_eq!(
+        project_dir_name("/Users/me/my.app_v2"),
+        "-Users-me-my-app-v2"
+    );
+}
+
+#[test]
+fn transcript_lookup_uses_project_dir_then_any_project() {
+    let projects = tempfile::tempdir().unwrap();
+    let cwd = "/work/repo";
+    assert!(!resume(Some(cwd)).transcript_exists_in(projects.path()));
+
+    let other = projects.path().join("-shortened-name");
+    std::fs::create_dir_all(&other).unwrap();
+    std::fs::write(other.join(format!("{SESSION_ID}.jsonl")), "").unwrap();
+    assert!(resume(Some(cwd)).transcript_exists_in(projects.path()));
+
+    let unsafe_id = ClaudeCodeResume {
+        session_id: "../-shortened-name/x".to_owned(),
+        cwd: Some(cwd.to_owned()),
+    };
+    assert!(!unsafe_id.transcript_exists_in(projects.path()));
 }

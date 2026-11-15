@@ -291,8 +291,16 @@ static const unsigned short kWarpFunctionKeyCode = 0x3F;
     if (selector != startDictationSelector && selector != stopDictationSelector) {
         return NO;
     }
+    // NSApp may route the action back through the responder chain into this view's
+    // doCommandBySelector:, which would recurse without this guard.
+    static BOOL forwarding = NO;
+    if (forwarding) {
+        return YES;
+    }
     if ([NSApp respondsToSelector:selector]) {
+        forwarding = YES;
         [NSApp performSelector:selector withObject:sender];
+        forwarding = NO;
     }
     return YES;
 }
@@ -471,6 +479,7 @@ static const unsigned short kWarpFunctionKeyCode = 0x3F;
 
 - (NSRect)firstRectForCharacterRange:(NSRange)range
                          actualRange:(nullable NSRangePointer)actualRange {
+    if (actualRange) *actualRange = range;
     NSWindow *window = self.window;
     if (self.readyForWarp) {
         NSRect contentRect = [window contentRectForFrameRect:[window frame]];

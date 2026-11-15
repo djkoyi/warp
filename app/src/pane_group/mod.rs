@@ -5269,7 +5269,7 @@ impl PaneGroup {
         }
         let session_view = self.active_session_view(ctx)?;
         let session_view = session_view.as_ref(ctx);
-        let project_dir = claude_tabs::project_dir(session_view, ctx)?;
+        let project_dir = claude_tabs::project_dir_without_io(session_view, ctx)?;
         claude_tabs::auto_tab_title(&project_dir, session_view.current_git_branch(ctx).as_deref())
     }
 

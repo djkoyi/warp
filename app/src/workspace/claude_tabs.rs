@@ -28,6 +28,18 @@ pub(crate) fn project_dir(view: &TerminalView, ctx: &AppContext) -> Option<PathB
         .or_else(|| view.active_session_path_if_local(ctx))
 }
 
+/// Like [`project_dir`], but without filesystem access, so it is cheap enough to call while
+/// rendering. The working directory is not checked for existence.
+pub(crate) fn project_dir_without_io(view: &TerminalView, ctx: &AppContext) -> Option<PathBuf> {
+    if let Some(repo) = view.current_local_repo_path() {
+        return Some(repo.to_path_buf());
+    }
+    match view.active_session_is_local(ctx) {
+        Some(true) => view.pwd().map(PathBuf::from),
+        Some(false) | None => None,
+    }
+}
+
 /// Tab title of the form `<folder> · <branch>`, or just `<folder>` outside of a branch.
 pub(crate) fn auto_tab_title(project_dir: &Path, branch: Option<&str>) -> Option<String> {
     let folder = sanitize_title_part(&project_dir.file_name()?.to_string_lossy());

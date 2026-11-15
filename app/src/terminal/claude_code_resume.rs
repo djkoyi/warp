@@ -4,7 +4,7 @@
 //! from the app-state database, so it is treated as untrusted: session IDs are validated
 //! against a strict charset and paths are quoted for the target shell.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::CLIAgent;
 use super::cli_agent_sessions::CLIAgentSession;
@@ -85,6 +85,54 @@ impl ClaudeCodeResume {
     }
 }
 
+impl ClaudeCodeResume {
+    /// Whether Claude Code still has the transcript of this conversation, which `--resume` needs.
+    /// Touches the filesystem, so call it once at restore time rather than on every render.
+    pub fn transcript_exists(&self) -> bool {
+        claude_projects_dir().is_some_and(|projects_dir| self.transcript_exists_in(&projects_dir))
+    }
+
+    fn transcript_exists_in(&self, projects_dir: &Path) -> bool {
+        // The ID becomes a path component, so it must not be able to name another directory.
+        if !is_valid_session_id(&self.session_id) {
+            return false;
+        }
+        let file_name = format!("{}.jsonl", self.session_id);
+        if let Some(cwd) = self.cwd.as_deref()
+            && projects_dir
+                .join(project_dir_name(cwd))
+                .join(&file_name)
+                .is_file()
+        {
+            return true;
+        }
+        // Claude Code shortens the directory name of very long paths, so fall back to looking the
+        // session up in every project.
+        std::fs::read_dir(projects_dir)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|entry| entry.path().join(&file_name).is_file())
+    }
+}
+
+/// `$CLAUDE_CONFIG_DIR/projects`, or `~/.claude/projects` when the variable is unset.
+fn claude_projects_dir() -> Option<PathBuf> {
+    let config_dir = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| dirs::home_dir().map(|home| home.join(".claude")))?;
+    Some(config_dir.join("projects"))
+}
+
+/// Claude Code names a project's transcript directory after its path, with every character other
+/// than an ASCII letter or digit replaced by `-`.
+fn project_dir_name(cwd: &str) -> String {
+    cwd.chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
 /// Progress of a Claude Code resume restored with a pane.
 #[derive(Clone, Debug)]
 pub enum PendingClaudeCodeResume {
@@ -94,8 +142,11 @@ pub enum PendingClaudeCodeResume {
         resume: ClaudeCodeResume,
         command: String,
     },
-    /// The resume command was submitted and its block has not completed yet.
-    Submitted(ClaudeCodeResume),
+    /// `command` was submitted and the block running it has not completed yet.
+    Submitted {
+        resume: ClaudeCodeResume,
+        command: String,
+    },
 }
 
 impl PendingClaudeCodeResume {
@@ -103,7 +154,7 @@ impl PendingClaudeCodeResume {
         match self {
             PendingClaudeCodeResume::AwaitingBootstrap(resume)
             | PendingClaudeCodeResume::Offered { resume, .. }
-            | PendingClaudeCodeResume::Submitted(resume) => resume,
+            | PendingClaudeCodeResume::Submitted { resume, .. } => resume,
         }
     }
 }
@@ -126,10 +177,12 @@ fn is_safe_cwd(cwd: &str) -> bool {
 }
 
 fn is_plain_word(word: &str) -> bool {
-    word.chars().all(|c| {
-        c.is_ascii_alphanumeric()
-            || matches!(c, '-' | '_' | '=' | '.' | ',' | ':' | '/' | '@' | '+')
-    })
+    // zsh expands a leading `=` into the path of the named command (`=cmd`).
+    !word.starts_with('=')
+        && word.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(c, '-' | '_' | '=' | '.' | ',' | ':' | '/' | '@' | '+')
+        })
 }
 
 /// Single-quotes `value` as one literal argument for `shell_type`.

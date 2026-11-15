@@ -157,7 +157,7 @@ use super::rewind_confirmation_dialog::{
     RewindConfirmationDialog, RewindConfirmationEvent, RewindDialogSource,
 };
 use super::tab_settings::{
-    HeaderToolbarChipSelection, NewTabPlacement, TabSettings, TabSettingsChangedEvent,
+    DirectoryTabColor, HeaderToolbarChipSelection, NewTabPlacement, TabSettings, TabSettingsChangedEvent,
     VerticalTabsDisplayGranularity, WorkspaceDecorationVisibility,
 };
 use super::util::{
@@ -5896,11 +5896,14 @@ impl Workspace {
                 .directory_tab_colors
                 .value()
                 .color_for_directory(cwd.as_path())
+                .and_then(DirectoryTabColor::ansi_color)
         } else {
             None
         };
+        // An `Unassigned` directory carries no color of its own, so it falls through to the
+        // automatic project color like an unconfigured one.
         let color = match configured {
-            Some(configured) => configured.ansi_color(),
+            Some(configured) => Some(configured),
             None if *TabSettings::as_ref(ctx).auto_tab_colors.value() => {
                 let project_dir = claude_tabs::project_dir(session_view, ctx)
                     .unwrap_or_else(|| cwd.as_path().to_path_buf());
@@ -16373,6 +16376,14 @@ impl Workspace {
                 {
                     Self::sync_codebase_tab_color(tab, ctx);
                 }
+                // The automatic tab name follows the repo and cwd, so the window title must too.
+                if self
+                    .tabs
+                    .get(self.active_tab_index)
+                    .is_some_and(|tab| tab.pane_group.id() == pane_group.id())
+                {
+                    self.update_window_title(ctx);
+                }
             }
             pane_group::Event::ActiveSessionChanged => {
                 self.update_active_session(ctx);
@@ -16892,6 +16903,14 @@ impl Workspace {
                     .find(|t| t.pane_group.id() == pane_group.id())
                 {
                     Self::sync_codebase_tab_color(tab, ctx);
+                }
+                // The automatic tab name follows the repo and cwd, so the window title must too.
+                if self
+                    .tabs
+                    .get(self.active_tab_index)
+                    .is_some_and(|tab| tab.pane_group.id() == pane_group.id())
+                {
+                    self.update_window_title(ctx);
                 }
             }
             #[cfg(feature = "local_fs")]

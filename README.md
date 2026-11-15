@@ -2,9 +2,9 @@
 >
 > Este repositorio es un fork personal de [Warp](https://github.com/warpdotdev/warp),
 > mantenido por el Ing. Franklin H. Rodríguez Palma, Departamento de Ingeniería de
-> Software, Caja de Seguro Social (Panamá). Es una versión modificada y no oficial de
-> Warp. Licencias: MIT para los crates `warpui` y `warpui_core`; AGPL-3.0 para el resto,
-> conservando los avisos de derechos de autor originales. Código fuente:
+> Software, Caja de Seguro Social (Panamá). Es una versión modificada (noviembre de 2026)
+> y no oficial de Warp. Licencias: MIT para los crates `warpui` y `warpui_core`; AGPL-3.0
+> para el resto, conservando los avisos de derechos de autor originales. Código fuente:
 > https://github.com/djkoyi/warp. Más detalles en [FORK.md](FORK.md).
 
 ---

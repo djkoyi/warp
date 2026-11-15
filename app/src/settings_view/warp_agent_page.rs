@@ -586,6 +586,23 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
 /// Team-scoped settings follow the window's selected team, so imperative widget state (button
 /// and editor enablement) has to be recomputed both when the teams themselves change and when
 /// this window switches to another team. Other windows' team changes are ignored.
+/// Maps a saved toggle key onto one the dropdown offers; Fn is never offered, so a value saved by
+/// an older build shows as None (which is also how it behaves).
+fn selectable_voice_input_toggle_key(key: VoiceInputToggleKey) -> VoiceInputToggleKey {
+    match key {
+        VoiceInputToggleKey::Fn => VoiceInputToggleKey::None,
+        VoiceInputToggleKey::None
+        | VoiceInputToggleKey::AltLeft
+        | VoiceInputToggleKey::AltRight
+        | VoiceInputToggleKey::ControlLeft
+        | VoiceInputToggleKey::ControlRight
+        | VoiceInputToggleKey::SuperLeft
+        | VoiceInputToggleKey::SuperRight
+        | VoiceInputToggleKey::ShiftLeft
+        | VoiceInputToggleKey::ShiftRight => key,
+    }
+}
+
 fn is_team_policy_change_for_window(event: &UserWorkspacesEvent, window_id: WindowId) -> bool {
     matches!(event, UserWorkspacesEvent::TeamsChanged)
         || matches!(
@@ -714,10 +731,12 @@ impl WarpAgentPageView {
             }
 
             let values = VoiceInputToggleKey::all_possible_values();
-            let current_value = AISettings::as_ref(ctx).voice_input_toggle_key.value();
+            let current_value = selectable_voice_input_toggle_key(
+                *AISettings::as_ref(ctx).voice_input_toggle_key.value(),
+            );
             let selected_index = values
                 .iter()
-                .position(|val| val == current_value)
+                .position(|val| *val == current_value)
                 .unwrap_or_else(|| {
                     log::warn!(
                         "Could not find current VoiceInputToggleKey value in dropdown option list"
@@ -902,10 +921,10 @@ impl WarpAgentPageView {
                     me.update_voice_input_dropdown_enablement(ctx);
                 }
                 AISettingsChangedEvent::VoiceInputToggleKey { .. } => {
-                    let current_value = AISettings::as_ref(ctx)
-                        .voice_input_toggle_key
-                        .value()
-                        .display_name();
+                    let current_value = selectable_voice_input_toggle_key(
+                        *AISettings::as_ref(ctx).voice_input_toggle_key.value(),
+                    )
+                    .display_name();
                     me.voice_input_toggle_key_dropdown
                         .update(ctx, |dropdown, ctx| {
                             dropdown.set_selected_by_name(current_value, ctx)

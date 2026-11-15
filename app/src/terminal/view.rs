@@ -2651,6 +2651,10 @@ pub struct TerminalView {
     /// The resume record most recently sent to the app-state writer, so plugin events that do
     /// not change it don't trigger a full app-state save.
     last_saved_claude_code_resume: Option<ClaudeCodeResume>,
+    /// Whether the active long-running block was Claude Code when the resume record was last
+    /// refreshed. A plugin notification alone is not trusted to name the conversation to resume,
+    /// since any process in the pane can emit one.
+    claude_code_resume_verified: bool,
     /// Timer that auto-dismisses the slow-bootstrap banner after
     /// [`SLOW_BOOTSTRAP_BANNER_AUTO_DISMISS_DURATION`]. Held so it can be
     /// aborted when the banner is hidden for any other reason (manual
@@ -4434,6 +4438,7 @@ impl TerminalView {
             pending_claude_code_resume: None,
             claude_code_resume_banner: None,
             last_saved_claude_code_resume: None,
+            claude_code_resume_verified: false,
             slow_bootstrap_banner_auto_dismiss_handle: None,
             incompatible_configuration_banner,
             is_incompatible_configuration_banner_open: false,
@@ -12773,7 +12778,7 @@ impl TerminalView {
                     footer.clear_warpify(ctx);
                 });
                 self.hide_use_agent_footer_in_blocklist(ctx);
-                if matches!(block_completed_event.block_type, BlockType::User(_)) {
+                if let BlockType::User(completed) = &block_completed_event.block_type {
                     // Close the rich input editor if it was open (side effects
                     // like input config restore happen reactively).
                     // The auto-toggle flag is irrelevant here because the
@@ -12782,11 +12787,18 @@ impl TerminalView {
                     CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions_model, ctx| {
                         sessions_model.remove_session(self.view_id, ctx);
                     });
-                    if matches!(
-                        self.pending_claude_code_resume,
-                        Some(PendingClaudeCodeResume::Submitted(_))
-                    ) {
-                        self.pending_claude_code_resume = None;
+                    // Another block (an rc-file command, or one typed before the resume command
+                    // ran) can finish first; only the resume block itself ends the resume.
+                    if let Some(PendingClaudeCodeResume::Submitted { command, .. }) =
+                        &self.pending_claude_code_resume
+                    {
+                        let completed_command = completed.command.get_with(|compute| {
+                            let model = self.model.lock();
+                            compute(model.block_list())
+                        });
+                        if completed_command.trim() == command.trim() {
+                            self.pending_claude_code_resume = None;
+                        }
                     }
                     self.save_claude_code_resume_if_changed(ctx);
                 }
@@ -16995,6 +17007,7 @@ impl TerminalView {
         }
         CLIAgentSessionsModel::as_ref(ctx)
             .session(self.view_id)
+            .filter(|_| self.claude_code_resume_verified)
             .and_then(ClaudeCodeResume::from_live_session)
             .or_else(|| {
                 self.pending_claude_code_resume
@@ -17015,7 +17028,7 @@ impl TerminalView {
         // bootstrap is anything else (e.g. rc files that exec into ssh), drop the resume.
         let is_local_login_shell = matches!(session.session_type(), SessionType::Local)
             && session.subshell_info().is_none();
-        if !is_local_login_shell {
+        if !is_local_login_shell || !resume.transcript_exists() {
             self.save_claude_code_resume_if_changed(ctx);
             return;
         }
@@ -17039,7 +17052,10 @@ impl TerminalView {
         command: &str,
         ctx: &mut ViewContext<Self>,
     ) {
-        self.pending_claude_code_resume = Some(PendingClaudeCodeResume::Submitted(resume));
+        self.pending_claude_code_resume = Some(PendingClaudeCodeResume::Submitted {
+            resume,
+            command: command.to_owned(),
+        });
         self.execute_command_or_set_pending(command, ctx);
     }
 
@@ -17097,7 +17113,14 @@ impl TerminalView {
         self.claude_code_resume_banner = None;
         // The command was built for the login shell; never type it into an SSH session or
         // subshell the user has entered since the banner appeared.
-        if self.active_session_is_local(ctx) == Some(true) {
+        let is_local_login_shell = self
+            .active_block_session_id()
+            .and_then(|session_id| self.sessions.as_ref(ctx).get(session_id))
+            .is_some_and(|session| {
+                matches!(session.session_type(), SessionType::Local)
+                    && session.subshell_info().is_none()
+            });
+        if is_local_login_shell {
             self.submit_claude_code_resume(resume, &command, ctx);
         } else {
             self.save_claude_code_resume_if_changed(ctx);
@@ -17125,6 +17148,10 @@ impl TerminalView {
         if ctx.windows().stage() == ApplicationStage::Terminating {
             return;
         }
+        self.claude_code_resume_verified = {
+            let model = self.model.lock();
+            matches!(self.detect_cli_agent_from_model(&model, ctx), Some((CLIAgent::Claude, _)))
+        };
         let current = self.claude_code_resume_to_persist(ctx);
         if current == self.last_saved_claude_code_resume {
             return;
