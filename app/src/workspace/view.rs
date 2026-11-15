@@ -21366,6 +21366,147 @@ impl Workspace {
         Shrinkable::new(1.0, inner).finish()
     }
 
+    /// Restarts the background poller that feeds the puente status chip. Bumping the generation
+    /// invalidates any in-flight poll so a stale result can neither overwrite the snapshot nor
+    /// reschedule itself. A fresh poll is started only while the chip setting is enabled.
+    fn restart_puente_poller(&mut self, ctx: &mut ViewContext<Self>) {
+        self.puente_poll_generation = self.puente_poll_generation.wrapping_add(1);
+        if *TabSettings::as_ref(ctx).show_puente_status_chip {
+            let generation = self.puente_poll_generation;
+            self.schedule_puente_poll(generation, true, ctx);
+        }
+    }
+
+    /// Runs the configured puente script off the UI thread and, on the main thread, stores the
+    /// parsed snapshot (notifying only on change) before scheduling the next poll. All failure
+    /// modes (missing script, non-zero exit, empty or non-JSON output, timeout) resolve to
+    /// `PuenteStatus::Unavailable`; the script itself resolves its token and never hangs.
+    fn schedule_puente_poll(&self, generation: u64, immediate: bool, ctx: &mut ViewContext<Self>) {
+        let script = TabSettings::as_ref(ctx).puente_status_script.value().clone();
+        ctx.spawn(
+            async move {
+                if !immediate {
+                    warpui::r#async::Timer::after(puente_status::PUENTE_POLL_INTERVAL).await;
+                }
+                let script_path = PathBuf::from(script);
+                let join =
+                    tokio::task::spawn_blocking(move || puente_status::run_puente_script(&script_path));
+                match tokio::time::timeout(puente_status::PUENTE_HARD_TIMEOUT, join).await {
+                    Ok(Ok(status)) => status,
+                    _ => PuenteStatus::Unavailable,
+                }
+            },
+            move |me, status, ctx| {
+                if me.puente_poll_generation != generation
+                    || !*TabSettings::as_ref(ctx).show_puente_status_chip
+                {
+                    return;
+                }
+                if me.puente_status != status {
+                    me.puente_status = status;
+                    ctx.notify();
+                }
+                me.schedule_puente_poll(generation, false, ctx);
+            },
+        );
+    }
+
+    /// Renders the puente broker status chip shown in the top bar beside the account-usage chip:
+    /// the number of connected machines and how many are in use, with a tooltip listing them.
+    /// Green when at least one machine is connected, dimmed for "sin equipos" / "sin conexión".
+    /// Returns `None` (chip hidden) when the setting is off or the configured script is absent.
+    fn render_puente_status_chip(
+        &self,
+        appearance: &Appearance,
+        ctx: &AppContext,
+    ) -> Option<Box<dyn Element>> {
+        let settings = TabSettings::as_ref(ctx);
+        if !*settings.show_puente_status_chip {
+            return None;
+        }
+        let script = settings.puente_status_script.value();
+        if script.is_empty() || !Path::new(script).exists() {
+            return None;
+        }
+
+        let theme = appearance.theme();
+        let ui_font_family = appearance.ui_font_family();
+
+        let label_color: Fill = if self.puente_status.is_dimmed() {
+            internal_colors::text_disabled(theme, theme.background().into_solid()).into()
+        } else {
+            Fill::success()
+        };
+        let label = Text::new_inline(self.puente_status.label(), ui_font_family, 12.)
+            .with_color(label_color)
+            .finish();
+
+        let tooltip_lines = self.puente_status.tooltip_lines();
+        let tooltip_bg = theme.tooltip_background();
+        let tooltip_fg = theme.background().into_solid();
+        let tooltip_outline = theme.outline();
+        let render_tooltip = move || -> Box<dyn Element> {
+            let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Start);
+            for line in tooltip_lines {
+                column.add_child(
+                    Text::new_inline(line, ui_font_family, 10.)
+                        .with_color(tooltip_fg)
+                        .finish(),
+                );
+            }
+            Container::new(column.finish())
+                .with_background_color(tooltip_bg)
+                .with_border(Border::all(1.).with_border_fill(tooltip_outline))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+                .with_padding_left(8.)
+                .with_padding_right(8.)
+                .with_padding_top(4.)
+                .with_padding_bottom(4.)
+                .finish()
+        };
+
+        let default_styles = UiComponentStyles {
+            font_color: Some(theme.sub_text_color(theme.background()).into_solid()),
+            font_size: Some(12.),
+            font_weight: Some(Weight::Medium),
+            font_family_id: Some(ui_font_family),
+            height: Some(24.),
+            background: Some(internal_colors::fg_overlay_1(theme).into()),
+            border_radius: Some(CornerRadius::with_all(Radius::Pixels(4.))),
+            border_width: Some(0.),
+            padding: Some(Coords {
+                top: 0.,
+                bottom: 0.,
+                left: 8.,
+                right: 8.,
+            }),
+            ..Default::default()
+        };
+        let hover_styles = UiComponentStyles {
+            background: Some(internal_colors::fg_overlay_2(theme).into()),
+            ..default_styles
+        };
+
+        let chip = Button::new(
+            self.mouse_states.puente_status_chip.clone(),
+            default_styles,
+            Some(hover_styles),
+            None,
+            None,
+        )
+        .with_custom_label(label)
+        .with_cursor(None)
+        .with_tooltip(render_tooltip)
+        .build()
+        .finish();
+
+        Some(
+            Container::new(chip)
+                .with_margin_left(TAB_BAR_PADDING_LEFT)
+                .finish(),
+        )
+    }
+
     /// Renders the global account-usage chip shown in the top bar beside the search: the account
     /// 5h and 7d rate-limit usage and the accumulated cost across every live Claude session. Hover
     /// reveals a tooltip with each limit's reset countdown. Returns `None` (chip hidden) when the
