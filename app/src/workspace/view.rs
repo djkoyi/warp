@@ -7142,95 +7142,9 @@ impl Workspace {
             menu_items.push(docker_item.into_item());
         }
 
-        // 4. User tab configs
-        if FeatureFlag::TabConfigs.is_enabled() {
-            let tab_configs = WarpConfig::as_ref(ctx).tab_configs().to_vec();
-
-            // Count occurrences of each config name so we can disambiguate
-            // duplicates in the menu (e.g. "My Tab Config", "My Tab Config (1)").
-            let mut name_totals: HashMap<String, usize> = HashMap::new();
-            for config in &tab_configs {
-                *name_totals.entry(config.name.clone()).or_default() += 1;
-            }
-            let mut name_seen: HashMap<String, usize> = HashMap::new();
-
-            for tab_config in tab_configs {
-                let is_worktree = tab_config.is_worktree();
-                let icon = if is_worktree {
-                    icons::Icon::Dataflow02
-                } else {
-                    icons::Icon::LayoutAlt01
-                };
-                let is_default_config = effective_default == DefaultSessionMode::TabConfig
-                    && tab_config
-                        .source_path
-                        .as_ref()
-                        .is_some_and(|p| p.to_string_lossy() == default_tab_config_path);
-
-                let display_name = if name_totals.get(&tab_config.name).copied().unwrap_or(0) > 1 {
-                    let seen = name_seen.entry(tab_config.name.clone()).or_default();
-                    *seen += 1;
-                    if *seen == 1 {
-                        tab_config.name.clone()
-                    } else {
-                        format!("{} ({})", tab_config.name, *seen - 1)
-                    }
-                } else {
-                    tab_config.name.clone()
-                };
-
-                let mut item = MenuItemFields::new(display_name)
-                    .with_on_select_action(WorkspaceAction::SelectTabConfig(tab_config))
-                    .with_icon(icon);
-                if is_default_config {
-                    item = item.with_key_shortcut_label(shortcut_label.clone());
-                }
-                menu_items.push(item.into_item());
-            }
-        }
-
-        // 5. Separator + worktree config entry + new tab config
-        if FeatureFlag::TabConfigs.is_enabled() {
-            menu_items.push(MenuItem::Separator);
-            menu_items.push(
-                MenuItemFields::new_submenu("New worktree config")
-                    .with_icon(icons::Icon::Dataflow02)
-                    .into_item(),
-            );
-
-            // 6. New tab config — V0: opens the TOML template.
-            menu_items.push(
-                MenuItemFields::new("New tab config")
-                    .with_on_select_action(WorkspaceAction::SelectNewSessionMenuItem(
-                        NewSessionMenuItem::CreateNewTabConfig,
-                    ))
-                    .with_icon(icons::Icon::Plus)
-                    .into_item(),
-            );
-        }
-
-        // 7. Separator + New tab group entry. Gated on the Grouped Tabs flag.
-        // TODO(johnturcoo) add group actions.
-        if FeatureFlag::GroupedTabs.is_enabled() {
-            menu_items.push(MenuItem::Separator);
-            menu_items.push(
-                MenuItemFields::new("New tab group")
-                    .with_on_select_action(WorkspaceAction::SelectNewSessionMenuItem(
-                        NewSessionMenuItem::CreateNewTabGroup,
-                    ))
-                    .with_icon(icons::Icon::LayersThree01)
-                    .into_item(),
-            );
-        }
-
-        menu_items.push(MenuItem::Separator);
-        menu_items.push(
-            MenuItemFields::new("Reopen closed session")
-                .with_on_select_action(WorkspaceAction::ReopenClosedSession)
-                .with_key_shortcut_label(reopen_closed_session_shortcut_label)
-                .with_disabled(UndoCloseStack::handle(ctx).as_ref(ctx).is_empty())
-                .into_item(),
-        );
+        // CSS fork: tab configs, worktree configs, tab groups and "Reopen closed session" are
+        // not offered here; this menu only opens Claude Code or a plain terminal.
+        let _ = (&default_tab_config_path, &reopen_closed_session_shortcut_label);
 
         menu_items
     }

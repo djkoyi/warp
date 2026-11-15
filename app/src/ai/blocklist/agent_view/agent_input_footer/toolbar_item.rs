@@ -290,7 +290,7 @@ impl AgentToolbarItemKind {
 
     /// Default left-side items for the CLI agent footer.
     pub fn cli_default_left() -> Vec<Self> {
-        let mut items = vec![
+        let items = vec![
             Self::FileAttach,
             Self::VoiceInput,
             Self::ContextChip(ContextChipKind::GitDiffStats),
