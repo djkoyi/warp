@@ -17211,7 +17211,10 @@ impl TerminalView {
         }
         self.claude_code_resume_verified = {
             let model = self.model.lock();
-            matches!(self.detect_cli_agent_from_model(&model, ctx), Some((CLIAgent::Claude, _)))
+            matches!(
+                self.detect_cli_agent_from_model(&model, ctx),
+                Some((CLIAgent::Claude, _))
+            )
         };
         let current = self.claude_code_resume_to_persist(ctx);
         if current == self.last_saved_claude_code_resume {
@@ -29056,7 +29059,10 @@ impl TypedActionView for TerminalView {
                 }));
             }
             ReviewCliAgentChanges => {
-                if CLIAgentSessionsModel::as_ref(ctx).session(self.view_id).is_none() {
+                if CLIAgentSessionsModel::as_ref(ctx)
+                    .session(self.view_id)
+                    .is_none()
+                {
                     self.show_error_toast("No hay Claude Code activo".to_owned(), ctx);
                     return;
                 }

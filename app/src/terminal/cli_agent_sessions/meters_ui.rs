@@ -6,12 +6,12 @@ use warpui::elements::{Element, Flex, ParentElement, Text, Wrap};
 use warpui::fonts::{Properties, Weight};
 use warpui::{AppContext, EntityId, SingletonEntity};
 
-use super::{CLIAgentSession, CLIAgentSessionsModel};
 use super::meters::{
     CLIAgentActivity, CLIAgentMeters, CLIAgentMetersSnapshot, CompactionState, ContextLevel,
     RateLimitWindow, context_level, format_cost, format_pct, format_reset_in, format_tokens,
     format_window_size, now_epoch_secs,
 };
+use super::{CLIAgentSession, CLIAgentSessionsModel};
 use crate::appearance::Appearance;
 use crate::code::editor::{add_color, remove_color};
 use crate::features::FeatureFlag;
