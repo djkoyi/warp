@@ -2,8 +2,8 @@ use super::*;
 
 #[test]
 fn parses_frontmatter_and_body() {
-    let doc = parse_markdown("---\nname: deploy\ndescription: Ship it\n---\n\n# Steps\nRun.\n")
-        .unwrap();
+    let doc =
+        parse_markdown("---\nname: deploy\ndescription: Ship it\n---\n\n# Steps\nRun.\n").unwrap();
     assert_eq!(doc.get("name").as_deref(), Some("deploy"));
     assert_eq!(doc.get("description").as_deref(), Some("Ship it"));
     assert_eq!(doc.body, "\n# Steps\nRun.\n");
@@ -50,7 +50,10 @@ fn round_trip_preserves_unknown_keys_and_order() {
         reparsed.frontmatter.get(&Value::String("tools".into())),
         Some(Value::Sequence(_))
     ));
-    assert_eq!(reparsed.get("description").as_deref(), Some("New description"));
+    assert_eq!(
+        reparsed.get("description").as_deref(),
+        Some("New description")
+    );
     assert_eq!(reparsed.body, "\nBody\n");
     assert!(rendered.starts_with("---\nname: reviewer\n"));
 }

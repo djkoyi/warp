@@ -5,6 +5,7 @@ use agent_profiles_page::{AgentProfilesPageAction, AgentProfilesPageEvent, Agent
 use appearance_page::{AppearancePageAction, AppearanceSettingsPageView};
 use billing_and_usage_dispatch::BillingAndUsageDispatchView;
 use billing_and_usage_page::BillingAndUsagePageEvent;
+use claude_code_page::{ClaudeCodePageEvent, ClaudeCodePageView};
 use cli_agents_page::{CLIAgentsPageAction, CLIAgentsPageEvent, CLIAgentsPageView};
 use code_editor_review_page::{EditorAndCodeReviewPageAction, EditorAndCodeReviewPageView};
 use code_indexing_page::{CodeIndexingPageAction, CodeIndexingPageEvent};
@@ -86,6 +87,7 @@ mod billing_and_usage_dispatch;
 mod billing_and_usage_page;
 mod billing_and_usage_page_v2;
 pub(crate) mod claude_code;
+mod claude_code_page;
 mod cli_agents_page;
 mod code_editor_review_page;
 mod code_indexing_page;
@@ -299,6 +301,8 @@ pub enum SettingsViewEvent {
     OpenMCPServerCollection,
     OpenCustomRouterEditor(Option<CustomModelRouter>),
     OpenCustomRouterFile(PathBuf),
+    /// Opens a Claude Code configuration file from the Claude Code page.
+    OpenClaudeCodeFile(PathBuf),
     OpenExecutionProfileEditor(ExecutionProfileId),
     OpenLspLogs {
         log_path: PathBuf,
@@ -331,6 +335,7 @@ pub enum SettingsSection {
     AgentMCPServers,
     Knowledge,
     ThirdPartyCLIAgents,
+    ClaudeCode,
     // ── Code umbrella subpages ──
     CodeIndexing,
     EditorAndCodeReview,
@@ -356,6 +361,7 @@ impl Display for SettingsSection {
             SettingsSection::AgentMCPServers => write!(f, "MCP servers"),
             SettingsSection::Knowledge => write!(f, "Knowledge"),
             SettingsSection::ThirdPartyCLIAgents => write!(f, "Third party CLI agents"),
+            SettingsSection::ClaudeCode => write!(f, "Claude Code"),
             SettingsSection::CodeIndexing => write!(f, "Indexing and projects"),
             SettingsSection::EditorAndCodeReview => write!(f, "Editor and Code Review"),
             SettingsSection::CloudEnvironments => write!(f, "Environments"),
@@ -399,6 +405,7 @@ impl SettingsSection {
             Self::AgentMCPServers => "MCP servers",
             Self::Knowledge => "Knowledge",
             Self::ThirdPartyCLIAgents => "Third party CLI agents",
+            Self::ClaudeCode => "Claude Code",
             Self::CodeIndexing => "Indexing and projects",
             Self::EditorAndCodeReview => "Editor and Code Review",
             Self::CloudEnvironments => "Environments",
@@ -438,6 +445,7 @@ impl SettingsSection {
             "MCP servers" | "MCP Servers" | "AgentMCPServers" => Self::AgentMCPServers,
             "Knowledge" => Self::Knowledge,
             "Third party CLI agents" | "ThirdPartyCLIAgents" => Self::ThirdPartyCLIAgents,
+            "Claude Code" | "ClaudeCode" => Self::ClaudeCode,
             // "Code" named the combined page before it split in two.
             "Indexing and projects" | "CodeIndexing" | "Code" => Self::CodeIndexing,
             "Editor and Code Review" | "EditorAndCodeReview" => Self::EditorAndCodeReview,
@@ -1158,6 +1166,7 @@ macro_rules! update_page {
             SettingsPageViewHandle::AgentProfiles(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::Knowledge(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::CLIAgents(handle) => $ctx.update_view(handle, $update),
+            SettingsPageViewHandle::ClaudeCode(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::CloudEnvironments(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::About(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::CodeIndexing(handle) => $ctx.update_view(handle, $update),
@@ -1263,6 +1272,12 @@ impl SettingsView {
         let cli_agents_page_handle = ctx.add_typed_action_view(CLIAgentsPageView::new);
         ctx.subscribe_to_view(&cli_agents_page_handle, |me, _, event, ctx| {
             me.handle_cli_agents_page_event(event, ctx);
+        });
+
+        // Claude Code configuration page
+        let claude_code_page_handle = ctx.add_typed_action_view(|_| ClaudeCodePageView::new());
+        ctx.subscribe_to_view(&claude_code_page_handle, |me, _, event, ctx| {
+            me.handle_claude_code_page_event(event, ctx);
         });
 
         // Environments page
@@ -1379,6 +1394,7 @@ impl SettingsView {
             SettingsPage::new(agent_profiles_page_handle),
             SettingsPage::new(knowledge_page_handle),
             SettingsPage::new(cli_agents_page_handle),
+            SettingsPage::new(claude_code_page_handle),
             billing_and_usage_page,
             SettingsPage::new(code_indexing_page_handle),
             SettingsPage::new(editor_review_page_handle),
@@ -1433,6 +1449,9 @@ impl SettingsView {
                     SettingsSection::WarpCloudAgentAPIKeys,
                 ],
             )),
+            // A top-level page rather than an Agents subpage: it manages Claude Code's own files,
+            // not Warp's agent, and keeps the Agents umbrella's arrow-key order unchanged.
+            SettingsNavItem::Page(SettingsSection::ClaudeCode),
             SettingsNavItem::Page(SettingsSection::Teams),
             SettingsNavItem::Page(SettingsSection::Appearance),
             SettingsNavItem::Page(SettingsSection::Features),
@@ -1984,6 +2003,24 @@ impl SettingsView {
         }
     }
 
+    fn handle_claude_code_page_event(
+        &mut self,
+        event: &ClaudeCodePageEvent,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            ClaudeCodePageEvent::ShowToast { message, flavor } => {
+                ctx.emit(SettingsViewEvent::ShowToast {
+                    message: message.clone(),
+                    flavor: *flavor,
+                })
+            }
+            ClaudeCodePageEvent::OpenFile(path) => {
+                ctx.emit(SettingsViewEvent::OpenClaudeCodeFile(path.clone()))
+            }
+        }
+    }
+
     fn handle_cli_agents_page_event(
         &mut self,
         event: &CLIAgentsPageEvent,
@@ -2131,6 +2168,7 @@ impl SettingsView {
             SettingsPageViewHandle::AgentProfiles(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Knowledge(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::CLIAgents(v) => v.as_ref(app).should_render(app),
+            SettingsPageViewHandle::ClaudeCode(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::CloudEnvironments(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::MCPServers(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::CodeIndexing(v) => v.as_ref(app).should_render(app),

@@ -237,6 +237,8 @@ pub struct ClaudeSnapshot {
     pub paths: ClaudePaths,
     pub settings: Vec<SettingsFileInfo>,
     pub claude_json_error: Option<String>,
+    /// The key under `projects` in `.claude.json` that holds the current project, if any.
+    pub claude_json_project_key: Option<String>,
     pub skills: Vec<MdItem>,
     pub agents: Vec<MdItem>,
     pub commands: Vec<MdItem>,
@@ -252,6 +254,13 @@ pub struct ClaudeSnapshot {
 }
 
 impl ClaudeSnapshot {
+    /// The `.claude.json` project key to write per-project state under.
+    pub fn project_key(&self) -> Option<String> {
+        self.claude_json_project_key
+            .clone()
+            .or_else(|| self.paths.project_keys().into_iter().next())
+    }
+
     pub fn settings_file(&self, scope: SettingsScope) -> Option<&SettingsFileInfo> {
         self.settings.iter().find(|file| file.scope == scope)
     }
@@ -287,16 +296,13 @@ pub fn load_snapshot(paths: &ClaudePaths) -> ClaudeSnapshot {
         Err(err) if err.kind() == io::ErrorKind::NotFound => (Map::new(), None),
         Err(err) => (Map::new(), Some(err.to_string())),
     };
-    let project_entry = paths
-        .project_keys()
-        .into_iter()
-        .find_map(|key| {
-            claude_json
-                .get("projects")
-                .and_then(|projects| projects.get(&key))
-                .and_then(Value::as_object)
-                .map(|entry| (key, entry.clone()))
-        });
+    let project_entry = paths.project_keys().into_iter().find_map(|key| {
+        claude_json
+            .get("projects")
+            .and_then(|projects| projects.get(&key))
+            .and_then(Value::as_object)
+            .map(|entry| (key, entry.clone()))
+    });
 
     let skill_overrides = merged_string_map(&settings_in_order, "skillOverrides");
     let plugins = load_plugins(paths, &settings_in_order, &mut warnings);
@@ -307,7 +313,11 @@ pub fn load_snapshot(paths: &ClaudePaths) -> ClaudeSnapshot {
     let mut commands = Vec::new();
     for (origin, base) in writable_item_roots(paths) {
         skills.extend(scan_skills(&base.join("skills"), &origin));
-        agents.extend(scan_markdown_tree(&base.join("agents"), MdKind::Agent, &origin));
+        agents.extend(scan_markdown_tree(
+            &base.join("agents"),
+            MdKind::Agent,
+            &origin,
+        ));
         commands.extend(scan_markdown_tree(
             &base.join("commands"),
             MdKind::Command,
@@ -320,7 +330,11 @@ pub fn load_snapshot(paths: &ClaudePaths) -> ClaudeSnapshot {
         };
         let origin = ItemOrigin::Plugin(plugin.id.clone());
         skills.extend(scan_skills(&root.join("skills"), &origin));
-        agents.extend(scan_markdown_tree(&root.join("agents"), MdKind::Agent, &origin));
+        agents.extend(scan_markdown_tree(
+            &root.join("agents"),
+            MdKind::Agent,
+            &origin,
+        ));
         commands.extend(scan_markdown_tree(
             &root.join("commands"),
             MdKind::Command,
@@ -384,6 +398,7 @@ pub fn load_snapshot(paths: &ClaudePaths) -> ClaudeSnapshot {
         paths: paths.clone(),
         settings,
         claude_json_error,
+        claude_json_project_key: project_entry.as_ref().map(|(key, _)| key.clone()),
         skills,
         agents,
         commands,
@@ -454,7 +469,10 @@ fn sorted_entries(dir: &Path) -> Vec<fs::DirEntry> {
 fn read_markdown(path: &Path) -> (Option<MarkdownDoc>, Option<String>) {
     match fs::metadata(path) {
         Ok(metadata) if metadata.len() > MAX_MARKDOWN_BYTES => {
-            return (None, Some("archivo demasiado grande para editar".to_owned()));
+            return (
+                None,
+                Some("archivo demasiado grande para editar".to_owned()),
+            );
         }
         Ok(_) => {}
         Err(err) => return (None, Some(err.to_string())),
@@ -619,10 +637,7 @@ fn load_plugins(
                     let record = match record {
                         Value::Array(records) => records.first().and_then(Value::as_object),
                         Value::Object(record) => Some(record),
-                        Value::Null
-                        | Value::Bool(_)
-                        | Value::Number(_)
-                        | Value::String(_) => None,
+                        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => None,
                     };
                     plugins.insert(
                         id.clone(),

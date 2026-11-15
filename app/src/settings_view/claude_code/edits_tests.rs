@@ -168,7 +168,15 @@ fn edits_outside_claude_dirs_are_rejected() {
     let fx = fixture();
     let outside = fx.repo.join("notes.md");
     fs::write(&outside, "x").unwrap();
-    assert!(apply_edit(&fx.paths, ClaudeEdit::DeleteItem { path: outside.clone() }).is_err());
+    assert!(
+        apply_edit(
+            &fx.paths,
+            ClaudeEdit::DeleteItem {
+                path: outside.clone()
+            }
+        )
+        .is_err()
+    );
     assert!(outside.exists());
 }
 
@@ -205,7 +213,10 @@ fn mcp_upsert_rename_and_delete_preserve_claude_json() {
     assert_eq!(value["numStartups"], json!(3));
     assert_eq!(value["oauthAccount"], json!({"x": 1}));
     assert!(value["mcpServers"].get("old").is_none());
-    assert_eq!(value["mcpServers"]["renamed"]["args"], json!(["-y", "@scope/server"]));
+    assert_eq!(
+        value["mcpServers"]["renamed"]["args"],
+        json!(["-y", "@scope/server"])
+    );
     assert_eq!(value["mcpServers"]["renamed"]["timeout"], json!(5));
     assert_eq!(value["mcpServers"]["renamed"]["env"]["K"], json!("secret"));
 
@@ -217,10 +228,12 @@ fn mcp_upsert_rename_and_delete_preserve_claude_json() {
         },
     )
     .unwrap();
-    assert!(read_json(&fx.paths.claude_json)["mcpServers"]
-        .as_object()
-        .unwrap()
-        .is_empty());
+    assert!(
+        read_json(&fx.paths.claude_json)["mcpServers"]
+            .as_object()
+            .unwrap()
+            .is_empty()
+    );
     assert!(
         apply_edit(
             &fx.paths,
@@ -273,7 +286,10 @@ fn mcp_local_and_project_scopes() {
         json!("http")
     );
     let mcp_json = read_json(&fx.repo.join(".mcp.json"));
-    assert_eq!(mcp_json["mcpServers"]["shared"]["url"], json!("https://mcp.example.com"));
+    assert_eq!(
+        mcp_json["mcpServers"]["shared"]["url"],
+        json!("https://mcp.example.com")
+    );
 
     let duplicate = ClaudeEdit::UpsertMcpServer {
         scope: McpScope::Project,
@@ -290,7 +306,9 @@ fn build_mcp_entry_validates() {
     assert!(build_mcp_entry(None, "http", "", "", "ftp://x", Map::new(), Map::new()).is_err());
     assert!(build_mcp_entry(None, "ws", "", "", "", Map::new(), Map::new()).is_err());
     let switched = build_mcp_entry(
-        Some(&obj(json!({"command": "a", "args": ["b"], "env": {"K": "v"}}))),
+        Some(&obj(
+            json!({"command": "a", "args": ["b"], "env": {"K": "v"}}),
+        )),
         "sse",
         "",
         "",
@@ -506,7 +524,10 @@ fn hooks_add_edit_move_and_remove() {
     .unwrap();
     let value = read_json(&settings);
     assert_eq!(value["hooks"]["PreToolUse"].as_array().unwrap().len(), 1);
-    assert_eq!(value["hooks"]["Stop"][0]["hooks"][0]["command"], json!("three"));
+    assert_eq!(
+        value["hooks"]["Stop"][0]["hooks"][0]["command"],
+        json!("three")
+    );
 
     for (event, command, hook_index) in [
         ("Stop", "three", 0),

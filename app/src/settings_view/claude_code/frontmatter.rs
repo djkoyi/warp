@@ -48,7 +48,8 @@ impl MarkdownDoc {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect();
         } else {
-            self.frontmatter.insert(key, Value::String(value.to_owned()));
+            self.frontmatter
+                .insert(key, Value::String(value.to_owned()));
         }
     }
 

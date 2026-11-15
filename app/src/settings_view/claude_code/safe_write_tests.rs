@@ -33,7 +33,12 @@ fn atomic_write_keeps_permissions_and_symlinks() {
 
     let written = atomic_write(&link, b"new").unwrap();
     assert_eq!(written, fs::canonicalize(&real).unwrap());
-    assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+    assert!(
+        fs::symlink_metadata(&link)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
     assert_eq!(fs::read_to_string(&real).unwrap(), "new");
     assert_eq!(
         fs::metadata(&real).unwrap().permissions().mode() & 0o777,
@@ -50,7 +55,10 @@ fn write_with_backup_copies_the_previous_contents() {
 
     write_with_backup(&backups, &target, b"after").unwrap();
     assert_eq!(fs::read_to_string(&target).unwrap(), "after");
-    let backups: Vec<_> = fs::read_dir(&backups).unwrap().filter_map(Result::ok).collect();
+    let backups: Vec<_> = fs::read_dir(&backups)
+        .unwrap()
+        .filter_map(Result::ok)
+        .collect();
     assert_eq!(backups.len(), 1);
     assert_eq!(fs::read_to_string(backups[0].path()).unwrap(), "before");
     assert!(

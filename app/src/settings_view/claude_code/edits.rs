@@ -59,16 +59,24 @@ pub enum ClaudeEdit {
         body: String,
     },
     /// Deletes a skill directory, subagent or command file.
-    DeleteItem { path: PathBuf },
+    DeleteItem {
+        path: PathBuf,
+    },
     UpsertMcpServer {
         scope: McpScope,
         original_name: Option<String>,
         name: String,
         entry: Map<String, Value>,
     },
-    DeleteMcpServer { scope: McpScope, name: String },
+    DeleteMcpServer {
+        scope: McpScope,
+        name: String,
+    },
     /// Approves or rejects a project `.mcp.json` server in the local settings file.
-    SetMcpjsonServerEnabled { name: String, enabled: bool },
+    SetMcpjsonServerEnabled {
+        name: String,
+        enabled: bool,
+    },
     /// Toggles a user/local server for one project via `.claude.json` `disabledMcpServers`.
     SetMcpServerDisabled {
         project_key: String,
@@ -152,8 +160,7 @@ pub fn apply_edit(paths: &ClaudePaths, edit: ClaudeEdit) -> Result<String, Strin
             let file = mcp_file(paths, &scope)?;
             update_json_file(&backups, &file, |root| {
                 let servers = mcp_servers_object(root, &scope)?;
-                if original_name.as_deref() != Some(name.as_str()) && servers.contains_key(&name)
-                {
+                if original_name.as_deref() != Some(name.as_str()) && servers.contains_key(&name) {
                     return Err(format!("Ya existe un servidor MCP llamado \"{name}\""));
                 }
                 if let Some(original) = &original_name {
@@ -240,7 +247,9 @@ pub fn apply_edit(paths: &ClaudePaths, edit: ClaudeEdit) -> Result<String, Strin
         } => {
             validate_hook(&hook)?;
             let file = writable_settings_path(paths, scope)?;
-            update_json_file(&backups, &file, |root| upsert_hook(root, original.as_ref(), &hook))?;
+            update_json_file(&backups, &file, |root| {
+                upsert_hook(root, original.as_ref(), &hook)
+            })?;
             Ok(format!("Hook {} guardado", hook.event))
         }
         ClaudeEdit::RemoveHook { scope, location } => {
@@ -258,9 +267,7 @@ pub fn apply_edit(paths: &ClaudePaths, edit: ClaudeEdit) -> Result<String, Strin
         ClaudeEdit::SetCommonSettings { scope, update } => {
             validate_common_settings(&update)?;
             let file = writable_settings_path(paths, scope)?;
-            update_json_file(&backups, &file, |root| {
-                apply_common_settings(root, &update)
-            })?;
+            update_json_file(&backups, &file, |root| apply_common_settings(root, &update))?;
             Ok(format!("Configuración de {} guardada", scope.label()))
         }
     }
@@ -296,7 +303,9 @@ fn save_markdown(
             };
             if fs::symlink_metadata(&path).is_ok()
                 || (kind == MdKind::Skill
-                    && path.parent().is_some_and(|dir| fs::symlink_metadata(dir).is_ok()))
+                    && path
+                        .parent()
+                        .is_some_and(|dir| fs::symlink_metadata(dir).is_ok()))
             {
                 return Err(format!("Ya existe {}", path.display()));
             }
@@ -390,9 +399,10 @@ fn mcp_servers_object<'a>(
 ) -> Result<&'a mut Map<String, Value>, String> {
     match scope {
         McpScope::User | McpScope::Project => object_entry(root, "mcpServers"),
-        McpScope::Local(key) => {
-            object_entry(object_entry(object_entry(root, "projects")?, key)?, "mcpServers")
-        }
+        McpScope::Local(key) => object_entry(
+            object_entry(object_entry(root, "projects")?, key)?,
+            "mcpServers",
+        ),
         McpScope::Plugin(_) => Err("Los servidores de plugins son de solo lectura".to_owned()),
     }
 }
@@ -490,7 +500,11 @@ fn list_contains(map: &Map<String, Value>, key: &str, item: &str) -> bool {
         .is_some_and(|items| items.iter().any(|value| value.as_str() == Some(item)))
 }
 
-fn set_mcpjson_server_enabled(paths: &ClaudePaths, name: &str, enabled: bool) -> Result<(), String> {
+fn set_mcpjson_server_enabled(
+    paths: &ClaudePaths,
+    name: &str,
+    enabled: bool,
+) -> Result<(), String> {
     let backups = paths.backups_dir();
     let local = writable_settings_path(paths, SettingsScope::Local)?;
     if enabled {

@@ -71,7 +71,10 @@ pub fn backup(backups_dir: &Path, target: &Path) -> io::Result<Option<PathBuf>> 
     if metadata.file_type().is_symlink() {
         let link = fs::read_link(target)?;
         let note = destination.with_extension("symlink.txt");
-        fs::write(&note, format!("{} -> {}\n", target.display(), link.display()))?;
+        fs::write(
+            &note,
+            format!("{} -> {}\n", target.display(), link.display()),
+        )?;
         if fs::metadata(target).map(|m| m.is_file()).unwrap_or(false) {
             fs::copy(target, &destination)?;
         }
@@ -152,11 +155,9 @@ pub fn object_entry<'a>(
         .or_insert_with(|| Value::Object(Map::new()));
     match entry {
         Value::Object(map) => Ok(map),
-        Value::Null
-        | Value::Bool(_)
-        | Value::Number(_)
-        | Value::String(_)
-        | Value::Array(_) => Err(format!("La clave \"{key}\" no es un objeto JSON")),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Array(_) => {
+            Err(format!("La clave \"{key}\" no es un objeto JSON"))
+        }
     }
 }
 

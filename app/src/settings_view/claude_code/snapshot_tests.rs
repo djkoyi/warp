@@ -46,7 +46,12 @@ fn empty_setup_loads_without_errors() {
     assert!(snapshot.mcp_servers.is_empty());
     assert!(snapshot.warnings.is_empty());
     assert!(snapshot.claude_json_error.is_none());
-    assert!(snapshot.settings.iter().all(|file| !file.exists || file.scope == SettingsScope::Managed));
+    assert!(
+        snapshot
+            .settings
+            .iter()
+            .all(|file| !file.exists || file.scope == SettingsScope::Managed)
+    );
     assert_eq!(snapshot.memory_files.len(), 4);
 }
 
@@ -58,7 +63,10 @@ fn skills_from_user_project_and_plugins() {
         &config.join("skills/deploy/SKILL.md"),
         "---\nname: deploy\ndescription: Ship it\n---\nSteps\n",
     );
-    write(&config.join("skills/broken/SKILL.md"), "---\nname: [x\n---\n");
+    write(
+        &config.join("skills/broken/SKILL.md"),
+        "---\nname: [x\n---\n",
+    );
     write(&config.join("skills/no-skill-file/README.md"), "ignored");
     write(
         &fx.repo.join(".claude/skills/lint/SKILL.md"),
@@ -114,7 +122,10 @@ fn agents_and_nested_commands() {
         &config.join("agents/reviewer.md"),
         "---\nname: code-reviewer\ndescription: Reviews\ntools: Read, Grep\n---\nYou review.\n",
     );
-    write(&config.join("commands/frontend/component.md"), "Make a component\n");
+    write(
+        &config.join("commands/frontend/component.md"),
+        "Make a component\n",
+    );
     write(&config.join("commands/notes.txt"), "ignored");
 
     let snapshot = load_snapshot(&fx.paths);
@@ -237,8 +248,16 @@ fn hooks_attribution_and_permissions() {
     assert_eq!(model.effective, SettingsScope::Project);
     assert_eq!(model.entries.len(), 2);
 
-    let env = snapshot.attributions.iter().find(|a| a.key == "env").unwrap();
-    assert!(env.entries.iter().all(|(_, summary)| !summary.contains("value")));
+    let env = snapshot
+        .attributions
+        .iter()
+        .find(|a| a.key == "env")
+        .unwrap();
+    assert!(
+        env.entries
+            .iter()
+            .all(|(_, summary)| !summary.contains("value"))
+    );
 
     assert_eq!(snapshot.permission_rules.len(), 2);
     assert!(

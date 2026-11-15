@@ -46,5 +46,8 @@ fn summaries_hide_secrets() {
     assert_eq!(summarize_value("env", &json!({"A": "b"})), MASK);
     assert_eq!(summarize_value("apiKeyHelper", &json!("x")), MASK);
     assert_eq!(summarize_value("model", &json!("opus")), "opus");
-    assert_eq!(summarize_value("permissions", &json!({"allow": []})), "{allow}");
+    assert_eq!(
+        summarize_value("permissions", &json!({"allow": []})),
+        "{allow}"
+    );
 }

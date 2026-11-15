@@ -14,7 +14,10 @@ fn defaults_to_home_dot_claude() {
     let paths = ClaudePaths::resolve(no_env, Some(home.path().to_path_buf()), None).unwrap();
     assert_eq!(paths.config_dir, home.path().join(".claude"));
     assert_eq!(paths.claude_json, home.path().join(".claude.json"));
-    assert_eq!(paths.plugins_dir, home.path().join(".claude").join("plugins"));
+    assert_eq!(
+        paths.plugins_dir,
+        home.path().join(".claude").join("plugins")
+    );
     assert_eq!(
         paths.backups_dir(),
         home.path().join(".claude").join("warp").join("backups")
@@ -49,9 +52,12 @@ fn project_root_is_the_enclosing_repository() {
     fs::create_dir_all(&nested).unwrap();
     fs::create_dir_all(repo.join(".git")).unwrap();
 
-    let paths =
-        ClaudePaths::resolve(no_env, Some(home.path().to_path_buf()), Some(nested.clone()))
-            .unwrap();
+    let paths = ClaudePaths::resolve(
+        no_env,
+        Some(home.path().to_path_buf()),
+        Some(nested.clone()),
+    )
+    .unwrap();
     let project = paths.project.clone().unwrap();
     assert_eq!(project.root, repo);
     assert_eq!(project.cwd, nested);
