@@ -117,9 +117,11 @@ pub(crate) fn rate_limit_tone(used_pct: f32) -> MeterTone {
     }
 }
 
-/// Compact colored segments for the global account-usage chip in the top bar: `5h 42%`, `7d 18%`
-/// and the accumulated cost. The reset countdown lives only in the tooltip, so these segments are
-/// stable minute to minute and can also drive the chip's repaint check.
+/// Compact colored segments for the global account-usage chip in the top bar: the plan usage of the
+/// 5-hour and 7-day windows, e.g. `5h 42%`, `7d 18%`. The cost is deliberately omitted (useless on a
+/// subscription plan). The reset countdown lives only in the tooltip, so these segments are stable
+/// minute to minute and can also drive the chip's repaint check. A window that has not been reported
+/// is skipped, so the returned list is empty when neither window is available.
 pub fn global_chip_segments(global: &GlobalMeters) -> Vec<MeterSegment> {
     let mut segments = Vec::new();
     if let Some(window) = global.five_hour {
@@ -134,32 +136,26 @@ pub fn global_chip_segments(global: &GlobalMeters) -> Vec<MeterSegment> {
             rate_limit_tone(window.used_pct),
         ));
     }
-    if let Some(cost) = global.cost_usd {
-        segments.push(MeterSegment::new(format_cost(cost), MeterTone::Normal));
-    }
     segments
 }
 
-/// Tooltip lines (Spanish) for the global usage chip: the 5h and 7d limits with their reset
-/// countdown, and the accumulated cost.
+/// Tooltip lines (Spanish) for the global usage chip: the 5h and 7d plan limits with their reset
+/// countdown. No cost (useless on a subscription plan).
 pub fn global_chip_tooltip_lines(global: &GlobalMeters, now: i64) -> Vec<String> {
     let mut lines = Vec::new();
     if let Some(window) = global.five_hour {
         lines.push(format!(
-            "Límite de 5 h: {}{}",
+            "Límite de 5 horas: {} usado{}",
             format_pct(window.used_pct),
             reset_suffix(window.resets_at, now)
         ));
     }
     if let Some(window) = global.seven_day {
         lines.push(format!(
-            "Límite de 7 días: {}{}",
+            "Límite semanal (7 días): {} usado{}",
             format_pct(window.used_pct),
             reset_suffix(window.resets_at, now)
         ));
-    }
-    if let Some(cost) = global.cost_usd {
-        lines.push(format!("Costo: {}", format_cost(cost)));
     }
     lines
 }
