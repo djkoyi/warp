@@ -773,6 +773,7 @@ impl Default for VerticalTabsPanelState {
             show_details_on_hover_mouse_state: Default::default(),
             claude_field_mouse_states: Default::default(),
             show_account_usage_chip_mouse_state: Default::default(),
+            show_puente_status_chip_mouse_state: Default::default(),
             panel_right_click_mouse_state: Default::default(),
             show_settings_popup: false,
         }
