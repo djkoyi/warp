@@ -34,7 +34,10 @@ fn puente_array_vacio_es_sin_equipos_atenuado() {
     assert_eq!(status.equipos_count(), 0);
     assert!(status.is_dimmed());
     assert_eq!(status.label(), "puente: sin equipos");
-    assert_eq!(status.tooltip_lines(), vec!["Sin equipos conectados".to_string()]);
+    assert_eq!(
+        status.tooltip_lines(),
+        vec!["Sin equipos conectados".to_string()]
+    );
 }
 
 #[test]

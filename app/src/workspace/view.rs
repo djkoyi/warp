@@ -139,8 +139,6 @@ use super::action::{
 };
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use super::auto_handoff::AutoCloudHandoffController;
-use super::claude_tabs;
-use super::puente_status::{self, PuenteStatus};
 pub(crate) use super::close_session_confirmation_dialog::OpenDialogSource;
 use super::close_session_confirmation_dialog::{
     CloseSessionConfirmationDialog, CloseSessionConfirmationEvent,
@@ -155,6 +153,7 @@ use super::hoa_onboarding::{
 use super::lightbox_view::{LightboxParams, LightboxView, LightboxViewEvent};
 use super::native_modal::{NativeModal, NativeModalEvent};
 use super::one_time_modal_model::OneTimeModalEvent;
+use super::puente_status::{self, PuenteStatus};
 use super::rewind_confirmation_dialog::{
     RewindConfirmationDialog, RewindConfirmationEvent, RewindDialogSource,
 };
@@ -166,7 +165,9 @@ use super::util::{
     PaneViewLocator, TabMovement, TerminalSessionFallbackBehavior, WelcomeTipsViewState,
     WorkspaceMouseStates, WorkspaceState, team_switcher_menu_items,
 };
-use super::{ActiveSession, TabBarDropTargetData, TabBarLocation, WorkspaceRegistry, util};
+use super::{
+    ActiveSession, TabBarDropTargetData, TabBarLocation, WorkspaceRegistry, claude_tabs, util,
+};
 use crate::ai::active_agent_views_model::ActiveAgentViewsModel;
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use crate::ai::agent::CancellationReason;
@@ -4558,7 +4559,8 @@ impl Workspace {
         let open_warp_drive = if !show_warp_home {
             if self.should_trigger_get_started_onboarding(ctx) {
                 self.trigger_get_started_onboarding(ctx);
-            } else if shell.is_none() && *TabSettings::as_ref(ctx).claude_open_on_new_window.value() {
+            } else if shell.is_none() && *TabSettings::as_ref(ctx).claude_open_on_new_window.value()
+            {
                 // CSS fork: this build is dedicated to Claude Code, so a window with nothing to
                 // restore starts with Claude instead of an empty shell. There is no active tab
                 // yet, so this cannot go through `add_claude_tab_here` (it reads the active
@@ -21387,7 +21389,10 @@ impl Workspace {
     /// modes (missing script, non-zero exit, empty or non-JSON output, timeout) resolve to
     /// `PuenteStatus::Unavailable`; the script itself resolves its token and never hangs.
     fn schedule_puente_poll(&self, generation: u64, immediate: bool, ctx: &mut ViewContext<Self>) {
-        let script = TabSettings::as_ref(ctx).puente_status_script.value().clone();
+        let script = TabSettings::as_ref(ctx)
+            .puente_status_script
+            .value()
+            .clone();
         ctx.spawn(
             async move {
                 if !immediate {

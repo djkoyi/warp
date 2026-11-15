@@ -123,10 +123,7 @@ fn show_puente_status_chip_uses_claude_path() {
         ShowPuenteStatusChip::toml_path(),
         Some("claude.show_puente_status_chip")
     );
-    assert_eq!(
-        ShowPuenteStatusChip::toml_key(),
-        "show_puente_status_chip"
-    );
+    assert_eq!(ShowPuenteStatusChip::toml_key(), "show_puente_status_chip");
 }
 
 #[test]
