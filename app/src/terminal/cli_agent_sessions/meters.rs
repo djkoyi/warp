@@ -86,6 +86,54 @@ impl CLIAgentMetersSnapshot {
     }
 }
 
+/// Account-wide usage aggregated across the live CLI agent sessions, for the global usage chip in
+/// the top bar. The 5h/7d rate-limit windows belong to the account (identical across sessions), so
+/// the most recently reported value wins; cost is summed across sessions.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct GlobalMeters {
+    pub five_hour: Option<RateLimitWindow>,
+    pub seven_day: Option<RateLimitWindow>,
+    pub cost_usd: Option<f64>,
+}
+
+impl GlobalMeters {
+    /// Nothing worth showing: no rate-limit window and no cost.
+    pub fn is_empty(&self) -> bool {
+        self.five_hour.is_none() && self.seven_day.is_none() && self.cost_usd.is_none()
+    }
+}
+
+/// Aggregates per-session snapshots into account-wide usage for the global chip. Returns `None`
+/// when no snapshot carries any usable account value.
+///
+/// The 5h/7d windows are account-global and only grow within a window, so the highest reported
+/// `used_pct` is the freshest and wins; cost is summed across every session.
+pub fn aggregate_global_meters<'a>(
+    snapshots: impl IntoIterator<Item = &'a CLIAgentMetersSnapshot>,
+) -> Option<GlobalMeters> {
+    let mut global = GlobalMeters::default();
+    for snapshot in snapshots {
+        if let Some(cost) = snapshot.cost_usd {
+            global.cost_usd = Some(global.cost_usd.unwrap_or(0.) + cost);
+        }
+        if let Some(window) = snapshot.five_hour
+            && global
+                .five_hour
+                .is_none_or(|current| window.used_pct > current.used_pct)
+        {
+            global.five_hour = Some(window);
+        }
+        if let Some(window) = snapshot.seven_day
+            && global
+                .seven_day
+                .is_none_or(|current| window.used_pct > current.used_pct)
+        {
+            global.seven_day = Some(window);
+        }
+    }
+    (!global.is_empty()).then_some(global)
+}
+
 /// Compaction history of a session.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CompactionState {
