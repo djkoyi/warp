@@ -1485,10 +1485,15 @@ impl SettingsView {
         }
 
         let initial_page = match page {
-            Some(SettingsSection::Scripting) if !FeatureFlag::WarpControlCli.is_enabled() => {
-                SettingsSection::Account
+            Some(section) if nav_items.iter().any(|item| match item {
+                SettingsNavItem::Page(listed) => *listed == section,
+                SettingsNavItem::Umbrella(umbrella) => umbrella.contains(section),
+            }) =>
+            {
+                section
             }
-            other => other.unwrap_or_default(),
+            // Pages hidden in this build (and the Account default) open Claude Code instead.
+            _ => SettingsSection::ClaudeCode,
         };
 
         // Auto-expand the umbrella if the initial page is one of its subpages.
