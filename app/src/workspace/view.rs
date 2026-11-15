@@ -7039,6 +7039,17 @@ impl Workspace {
         let reopen_closed_session_shortcut_label =
             keybinding_name_to_display_string("app:reopen_closed_session", ctx);
 
+        // 0. Claude Code first: this build is dedicated to it. Opens a new tab running `claude`
+        // in the current directory, without needing a shortcut.
+        if ContextFlag::CreateNewSession.is_enabled() {
+            menu_items.push(
+                MenuItemFields::new("Claude Code")
+                    .with_on_select_action(WorkspaceAction::AddClaudeTabHere)
+                    .with_icon(icons::Icon::ClaudeLogo)
+                    .into_item(),
+            );
+        }
+
         // 1. Agent (if AI enabled)
         if is_any_ai_enabled {
             let mut agent_item = MenuItemFields::new("Agent")
