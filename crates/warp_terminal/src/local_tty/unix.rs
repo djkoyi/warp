@@ -331,6 +331,7 @@ fn build_host_shell_command(
     // Prevent child processes from inheriting startup notification env.
     // See: https://specifications.freedesktop.org/startup-notification-spec/startup-notification-latest.txt
     builder.env_remove("DESKTOP_STARTUP_ID");
+    remove_inherited_agent_session_env(&mut builder);
 
     if let Some(version) = ChannelState::app_version() {
         builder.env("TERM_PROGRAM_VERSION", version);
