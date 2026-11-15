@@ -21401,7 +21401,7 @@ impl Workspace {
         };
 
         let default_styles = UiComponentStyles {
-            font_color: Some(theme.sub_text_color(theme.background()).into()),
+            font_color: Some(theme.sub_text_color(theme.background()).into_solid()),
             font_size: Some(12.),
             font_weight: Some(Weight::Medium),
             font_family_id: Some(ui_font_family),
