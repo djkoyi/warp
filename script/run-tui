@@ -131,7 +131,7 @@ if [[ "$(uname -s)" = "Darwin" ]]; then
 
   TUI_BIN_PATH="${BUILD_DIR}/${BIN}"
 
-  SIGNING_CERT="$(security find-identity -p codesigning -v | grep "Apple Development" | awk '{print $2}' | head -1)"
+  SIGNING_CERT="${WARP_SIGNING_IDENTITY:-$(security find-identity -p codesigning -v | grep "Apple Development" | grep -v "CSSMERR_" | awk '{print $2}' | head -1)}"
   if [ -n "$SIGNING_CERT" ]; then
     echo "Codesigning ${TUI_BIN_PATH}..."
     codesign --force --sign "$SIGNING_CERT" "$TUI_BIN_PATH"
