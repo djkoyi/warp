@@ -22118,6 +22118,10 @@ impl Workspace {
             target.add_child(chip);
         }
 
+        if let Some(chip) = self.render_puente_status_chip(appearance, ctx) {
+            target.add_child(chip);
+        }
+
         if let Some(update_pill) = self.render_tab_overflow_menu(ctx, appearance) {
             target.add_child(
                 Container::new(update_pill)
