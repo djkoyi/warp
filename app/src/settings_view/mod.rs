@@ -5,7 +5,7 @@ use agent_profiles_page::{AgentProfilesPageAction, AgentProfilesPageEvent, Agent
 use appearance_page::{AppearancePageAction, AppearanceSettingsPageView};
 use billing_and_usage_dispatch::BillingAndUsageDispatchView;
 use billing_and_usage_page::BillingAndUsagePageEvent;
-use claude_code_page::{ClaudeCodePageEvent, ClaudeCodePageView};
+use claude_code_page::{ClaudeCodePageEvent, ClaudeCodePageView, ClaudeSubpage};
 use cli_agents_page::{CLIAgentsPageAction, CLIAgentsPageEvent, CLIAgentsPageView};
 use code_editor_review_page::{EditorAndCodeReviewPageAction, EditorAndCodeReviewPageView};
 use code_indexing_page::{CodeIndexingPageAction, CodeIndexingPageEvent};
@@ -335,7 +335,16 @@ pub enum SettingsSection {
     AgentMCPServers,
     Knowledge,
     ThirdPartyCLIAgents,
+    // ── Claude Code umbrella subpages ──
+    /// The MCP subpage. Keeps the original `ClaudeCode` name and slug so Cmd+Alt+, deeplinks and
+    /// restored sessions that point at the old single page land on the first subpage.
     ClaudeCode,
+    ClaudeCodeSkills,
+    ClaudeCodePlugins,
+    ClaudeCodeAgents,
+    ClaudeCodeCommands,
+    ClaudeCodeHooks,
+    ClaudeCodeSettings,
     // ── Code umbrella subpages ──
     CodeIndexing,
     EditorAndCodeReview,
@@ -362,6 +371,12 @@ impl Display for SettingsSection {
             SettingsSection::Knowledge => write!(f, "Knowledge"),
             SettingsSection::ThirdPartyCLIAgents => write!(f, "Third party CLI agents"),
             SettingsSection::ClaudeCode => write!(f, "Claude Code"),
+            SettingsSection::ClaudeCodeSkills => write!(f, "Claude Code skills"),
+            SettingsSection::ClaudeCodePlugins => write!(f, "Claude Code plugins"),
+            SettingsSection::ClaudeCodeAgents => write!(f, "Claude Code subagents"),
+            SettingsSection::ClaudeCodeCommands => write!(f, "Claude Code commands"),
+            SettingsSection::ClaudeCodeHooks => write!(f, "Claude Code hooks"),
+            SettingsSection::ClaudeCodeSettings => write!(f, "Claude Code settings"),
             SettingsSection::CodeIndexing => write!(f, "Indexing and projects"),
             SettingsSection::EditorAndCodeReview => write!(f, "Editor and Code Review"),
             SettingsSection::CloudEnvironments => write!(f, "Environments"),
@@ -406,6 +421,12 @@ impl SettingsSection {
             Self::Knowledge => "Knowledge",
             Self::ThirdPartyCLIAgents => "Third party CLI agents",
             Self::ClaudeCode => "Claude Code",
+            Self::ClaudeCodeSkills => "Claude Code skills",
+            Self::ClaudeCodePlugins => "Claude Code plugins",
+            Self::ClaudeCodeAgents => "Claude Code subagents",
+            Self::ClaudeCodeCommands => "Claude Code commands",
+            Self::ClaudeCodeHooks => "Claude Code hooks",
+            Self::ClaudeCodeSettings => "Claude Code settings",
             Self::CodeIndexing => "Indexing and projects",
             Self::EditorAndCodeReview => "Editor and Code Review",
             Self::CloudEnvironments => "Environments",
@@ -446,6 +467,12 @@ impl SettingsSection {
             "Knowledge" => Self::Knowledge,
             "Third party CLI agents" | "ThirdPartyCLIAgents" => Self::ThirdPartyCLIAgents,
             "Claude Code" | "ClaudeCode" => Self::ClaudeCode,
+            "Claude Code skills" | "ClaudeCodeSkills" => Self::ClaudeCodeSkills,
+            "Claude Code plugins" | "ClaudeCodePlugins" => Self::ClaudeCodePlugins,
+            "Claude Code subagents" | "ClaudeCodeAgents" => Self::ClaudeCodeAgents,
+            "Claude Code commands" | "ClaudeCodeCommands" => Self::ClaudeCodeCommands,
+            "Claude Code hooks" | "ClaudeCodeHooks" => Self::ClaudeCodeHooks,
+            "Claude Code settings" | "ClaudeCodeSettings" => Self::ClaudeCodeSettings,
             // "Code" named the combined page before it split in two.
             "Indexing and projects" | "CodeIndexing" | "Code" => Self::CodeIndexing,
             "Editor and Code Review" | "EditorAndCodeReview" => Self::EditorAndCodeReview,
@@ -1281,11 +1308,17 @@ impl SettingsView {
             me.handle_cli_agents_page_event(event, ctx);
         });
 
-        // Claude Code configuration page
-        let claude_code_page_handle = ctx.add_typed_action_view(|_| ClaudeCodePageView::new());
-        ctx.subscribe_to_view(&claude_code_page_handle, |me, _, event, ctx| {
-            me.handle_claude_code_page_event(event, ctx);
-        });
+        // Claude Code configuration: one page per subpage of the "Claude Code" umbrella.
+        let claude_code_pages: Vec<SettingsPage> = ClaudeSubpage::ALL
+            .into_iter()
+            .map(|subpage| {
+                let handle = ctx.add_typed_action_view(|ctx| ClaudeCodePageView::new(subpage, ctx));
+                ctx.subscribe_to_view(&handle, |me, _, event, ctx| {
+                    me.handle_claude_code_page_event(event, ctx);
+                });
+                SettingsPage::new(handle).with_section(subpage.section())
+            })
+            .collect();
 
         // Environments page
         let environments_page_handle = ctx.add_typed_action_view(EnvironmentsPageView::new);
@@ -1401,7 +1434,6 @@ impl SettingsView {
             SettingsPage::new(agent_profiles_page_handle),
             SettingsPage::new(knowledge_page_handle),
             SettingsPage::new(cli_agents_page_handle),
-            SettingsPage::new(claude_code_page_handle),
             billing_and_usage_page,
             SettingsPage::new(code_indexing_page_handle),
             SettingsPage::new(editor_review_page_handle),
@@ -1415,6 +1447,8 @@ impl SettingsView {
             SettingsPage::new(show_blocks_view_handle),
             SettingsPage::new(warp_drive_page_handle),
         ];
+
+        settings_pages.extend(claude_code_pages);
 
         if let Some(scripting_page_handle) = scripting_page_handle {
             settings_pages.push(SettingsPage::new(scripting_page_handle));
@@ -1432,9 +1466,22 @@ impl SettingsView {
         // CSS fork: a Claude Code-only build. Warp's own agent, account, billing, cloud, teams,
         // Warp Drive, sharing, referrals and Warpify pages are not listed (their views still
         // exist, so deeplinks and restored sessions keep working).
+        let mut claude_code_umbrella = SettingsUmbrella::new(
+            "Claude Code",
+            ClaudeSubpage::ALL
+                .iter()
+                .map(|subpage| subpage.section())
+                .chain([SettingsSection::ThirdPartyCLIAgents])
+                .collect(),
+        );
+        for subpage in ClaudeSubpage::ALL {
+            claude_code_umbrella =
+                claude_code_umbrella.with_subpage_label(subpage.section(), subpage.nav_label());
+        }
+        claude_code_umbrella = claude_code_umbrella
+            .with_subpage_label(SettingsSection::ThirdPartyCLIAgents, "Medidores");
         let mut nav_items = vec![
-            SettingsNavItem::Page(SettingsSection::ClaudeCode),
-            SettingsNavItem::Page(SettingsSection::ThirdPartyCLIAgents),
+            SettingsNavItem::Umbrella(claude_code_umbrella),
             SettingsNavItem::Page(SettingsSection::Appearance),
             SettingsNavItem::Page(SettingsSection::Features),
             SettingsNavItem::Page(SettingsSection::EditorAndCodeReview),
@@ -1457,14 +1504,16 @@ impl SettingsView {
         }
 
         let initial_page = match page {
-            Some(section) if nav_items.iter().any(|item| match item {
-                SettingsNavItem::Page(listed) => *listed == section,
-                SettingsNavItem::Umbrella(umbrella) => umbrella.contains(section),
-            }) =>
+            Some(section)
+                if nav_items.iter().any(|item| match item {
+                    SettingsNavItem::Page(listed) => *listed == section,
+                    SettingsNavItem::Umbrella(umbrella) => umbrella.contains(section),
+                }) =>
             {
                 section
             }
-            // Pages hidden in this build (and the Account default) open Claude Code instead.
+            // Pages hidden in this build (and the Account default) open the first Claude Code
+            // subpage (MCP) instead.
             _ => SettingsSection::ClaudeCode,
         };
 

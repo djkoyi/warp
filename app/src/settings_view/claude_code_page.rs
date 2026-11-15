@@ -1,6 +1,9 @@
-//! The "Claude Code" settings page: views and edits the user's Claude Code configuration
+//! The "Claude Code" settings pages: view and edit the user's Claude Code configuration
 //! (skills, MCP servers, plugins, subagents, slash commands, hooks, settings files and memory
 //! files) for the user scope and the project of the active terminal pane.
+//!
+//! Each subpage of the sidebar's "Claude Code" group ([`ClaudeSubpage`]) is its own instance of
+//! [`ClaudeCodePageView`]; every instance loads its own snapshot when it is selected.
 //!
 //! All disk I/O runs on the background executor through [`claude_code::snapshot`] and
 //! [`claude_code::edits`]; this view only holds the latest snapshot and the open form.
@@ -9,16 +12,19 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use pathfinder_geometry::vector::vec2f;
 use serde_json::{Map, Value};
 use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    Border, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
-    Container, CornerRadius, CrossAxisAlignment, Element, Fill, Flex, MainAxisSize,
-    MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Shrinkable, Text, Wrap,
+    Border, ChildAnchor, ChildView, Clipped, ClippedScrollStateHandle, ClippedScrollable,
+    ConstrainedBox, Container, CornerRadius, CrossAxisAlignment, Element, Expanded, Fill, Flex,
+    MainAxisAlignment, MouseStateHandle, OffsetPositioning, ParentAnchor, ParentElement,
+    ParentOffsetBounds, Radius, ScrollbarWidth, Stack, Text, Wrap,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::ui_components::button::ButtonVariant;
 use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
+use warpui::ui_components::switch::SwitchStateHandle;
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use super::claude_code::edits::{
@@ -33,7 +39,7 @@ use super::claude_code::snapshot::{
 use super::claude_code::{ItemOrigin, SettingsScope};
 use super::settings_page::{
     CONTENT_FONT_SIZE, HEADER_PADDING, MatchData, PageTitle, PageType, SettingsPageMeta,
-    SettingsPageViewHandle, SettingsWidget, render_separator, render_sub_header,
+    SettingsPageViewHandle, SettingsWidget, render_sub_header,
 };
 use super::{SettingsSection, editor_text_colors};
 use crate::appearance::Appearance;
@@ -41,15 +47,31 @@ use crate::editor::{
     EditorOptions, EditorView, EnterAction, EnterSettings, PropagateAndNoOpNavigationKeys,
     SingleLineEditorOptions, TextOptions,
 };
+use crate::menu::{self, Menu, MenuItem, MenuItemFields};
+use crate::search_bar::SearchBar;
 use crate::ui_components::blended_colors;
+use crate::ui_components::buttons::icon_button;
+use crate::ui_components::icons::Icon;
 use crate::view_components::ToastFlavor;
+use crate::view_components::action_button::{ActionButton, NakedTheme};
 use crate::workspace::{ActiveSession, WorkspaceAction};
 
-const PAGE_TITLE: &str = "Claude Code";
 const RELOAD_HINT: &str = "Recarga Claude en las pestañas para aplicar el cambio";
 const RELOAD_ALL_TABS_LABEL: &str = "Recargar Claude en todas las pestañas";
 const TITLE_FONT_SIZE: f32 = 13.;
 const ROW_SPACING: f32 = 10.;
+const SEARCH_BAR_WIDTH: f32 = 220.;
+const CARD_SPACING: f32 = 8.;
+const CARD_PADDING: f32 = 12.;
+const CARD_INTERIOR_SPACING: f32 = 4.;
+const CARD_CORNER_RADIUS: f32 = 4.;
+const CHIP_FONT_SIZE: f32 = 10.;
+const MENU_WIDTH: f32 = 220.;
+/// Descriptions are cut to this many lines (and to `DESCRIPTION_MAX_CHARS`) on the cards.
+const DESCRIPTION_LINES: f32 = 2.;
+const DESCRIPTION_MAX_CHARS: usize = 220;
+/// Matches warpui's default UI line height ratio, used to size the two-line description clip.
+const LINE_HEIGHT_RATIO: f32 = 1.2;
 const BODY_EDITOR_MIN_HEIGHT: f32 = 120.;
 const BODY_EDITOR_MAX_HEIGHT: f32 = 360.;
 const KEY_ORDER_NOTE: &str = "Al guardar, las claves JSON se ordenan alfabéticamente (los valores \
@@ -59,9 +81,118 @@ const DEFAULT_MODE_PLACEHOLDER: &str =
 const HOOK_EVENTS_HINT: &str = "PreToolUse, PostToolUse, UserPromptSubmit, Notification, Stop, \
                                 SubagentStop, PreCompact, SessionStart, SessionEnd";
 
+/// A subpage of the sidebar's "Claude Code" group. Each one is its own settings page (and its own
+/// [`ClaudeCodePageView`] instance).
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ClaudeSubpage {
+    Mcp,
+    Skills,
+    Plugins,
+    Agents,
+    Commands,
+    Hooks,
+    Settings,
+}
+
+impl ClaudeSubpage {
+    /// Sidebar order. The first entry is what `SettingsSection::ClaudeCode` (Cmd+Alt+,) opens.
+    pub const ALL: [ClaudeSubpage; 7] = [
+        ClaudeSubpage::Mcp,
+        ClaudeSubpage::Skills,
+        ClaudeSubpage::Plugins,
+        ClaudeSubpage::Agents,
+        ClaudeSubpage::Commands,
+        ClaudeSubpage::Hooks,
+        ClaudeSubpage::Settings,
+    ];
+
+    pub fn section(self) -> SettingsSection {
+        match self {
+            ClaudeSubpage::Mcp => SettingsSection::ClaudeCode,
+            ClaudeSubpage::Skills => SettingsSection::ClaudeCodeSkills,
+            ClaudeSubpage::Plugins => SettingsSection::ClaudeCodePlugins,
+            ClaudeSubpage::Agents => SettingsSection::ClaudeCodeAgents,
+            ClaudeSubpage::Commands => SettingsSection::ClaudeCodeCommands,
+            ClaudeSubpage::Hooks => SettingsSection::ClaudeCodeHooks,
+            ClaudeSubpage::Settings => SettingsSection::ClaudeCodeSettings,
+        }
+    }
+
+    /// The label shown in the sidebar.
+    pub fn nav_label(self) -> &'static str {
+        match self {
+            ClaudeSubpage::Mcp => "MCP",
+            ClaudeSubpage::Skills => "Skills",
+            ClaudeSubpage::Plugins => "Plugins",
+            ClaudeSubpage::Agents => "Subagentes",
+            ClaudeSubpage::Commands => "Comandos",
+            ClaudeSubpage::Hooks => "Hooks",
+            ClaudeSubpage::Settings => "Ajustes",
+        }
+    }
+
+    fn title(self) -> &'static str {
+        match self {
+            ClaudeSubpage::Mcp => "Servidores MCP",
+            ClaudeSubpage::Skills => "Skills",
+            ClaudeSubpage::Plugins => "Plugins",
+            ClaudeSubpage::Agents => "Subagentes",
+            ClaudeSubpage::Commands => "Comandos slash",
+            ClaudeSubpage::Hooks => "Hooks",
+            ClaudeSubpage::Settings => "Ajustes",
+        }
+    }
+
+    fn search_placeholder(self) -> &'static str {
+        match self {
+            ClaudeSubpage::Mcp => "Buscar servidores",
+            ClaudeSubpage::Skills => "Buscar skills",
+            ClaudeSubpage::Plugins => "Buscar plugins",
+            ClaudeSubpage::Agents => "Buscar subagentes",
+            ClaudeSubpage::Commands => "Buscar comandos",
+            ClaudeSubpage::Hooks => "Buscar hooks",
+            ClaudeSubpage::Settings => "Buscar archivos",
+        }
+    }
+
+    /// The label of the header's "+ Nuevo" button, if the subpage can create entries.
+    fn new_label(self) -> Option<&'static str> {
+        match self {
+            ClaudeSubpage::Skills => Some("Nueva"),
+            ClaudeSubpage::Mcp
+            | ClaudeSubpage::Agents
+            | ClaudeSubpage::Commands
+            | ClaudeSubpage::Hooks => Some("Nuevo"),
+            ClaudeSubpage::Plugins | ClaudeSubpage::Settings => None,
+        }
+    }
+}
+
+/// An entry rendered as a card, used to build its "⋯" menu.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CardRef {
+    Item(MdKind, usize),
+    Mcp(usize),
+    Plugin(usize),
+    Marketplace(usize),
+    Hook(usize),
+    SettingsFile(SettingsScope),
+    Memory(usize),
+}
+
+/// What the page's single dropdown menu is currently attached to.
+#[derive(Clone, Debug, PartialEq)]
+enum MenuAnchor {
+    New,
+    Card(CardRef),
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum ClaudeCodePageAction {
     Reload,
+    OpenNewMenu,
+    OpenCardMenu(CardRef),
+    CloseMenu,
     OpenFile(PathBuf),
     CopyPath(PathBuf),
     NewItem { kind: MdKind, project: bool },
@@ -242,6 +373,7 @@ enum Status {
 }
 
 pub struct ClaudeCodePageView {
+    subpage: ClaudeSubpage,
     page: PageType<Self>,
     snapshot: Option<ClaudeSnapshot>,
     loading: bool,
@@ -256,44 +388,74 @@ pub struct ClaudeCodePageView {
     /// Button mouse states keyed by a stable per-button id, so rows created from the snapshot
     /// keep their hover/click state across renders.
     mouse_states: RefCell<HashMap<String, MouseStateHandle>>,
-    reload_mouse_state: MouseStateHandle,
+    /// Card switch states, keyed like `mouse_states`.
+    switch_states: RefCell<HashMap<String, SwitchStateHandle>>,
+    search_editor: ViewHandle<EditorView>,
+    search_bar: ViewHandle<SearchBar>,
+    new_button: Option<ViewHandle<ActionButton>>,
+    /// The page's dropdown, shared by the "+ Nuevo" button and every card's "⋯" button.
+    menu: ViewHandle<Menu<ClaudeCodePageAction>>,
+    open_menu: Option<MenuAnchor>,
 }
 
 impl ClaudeCodePageView {
-    pub fn new() -> Self {
-        let widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![
-            Box::new(OverviewWidget),
-            Box::new(SkillsWidget),
-            Box::new(McpWidget),
-            Box::new(PluginsWidget),
-            Box::new(ItemsWidget::agents()),
-            Box::new(ItemsWidget::commands()),
-            Box::new(HooksWidget),
-            Box::new(SettingsFilesWidget),
-            Box::new(MemoryWidget),
-        ];
-        let title =
-            PageTitle::new(PAGE_TITLE).with_trailing_element(|view: &Self, appearance, _| {
-                let label = if view.loading {
-                    "Cargando…"
-                } else {
-                    "Recargar"
-                };
-                let mut button = appearance
-                    .ui_builder()
-                    .button(ButtonVariant::Secondary, view.reload_mouse_state.clone())
-                    .with_text_label(label.to_owned());
-                if view.loading || view.busy {
-                    button = button.disabled();
-                }
-                button
-                    .build()
-                    .on_click(|ctx, _, _| {
-                        ctx.dispatch_typed_action(ClaudeCodePageAction::Reload);
-                    })
-                    .finish()
-            });
+    pub fn new(subpage: ClaudeSubpage, ctx: &mut ViewContext<Self>) -> Self {
+        let mut widgets: Vec<Box<dyn SettingsWidget<View = Self>>> =
+            vec![Box::new(OverviewWidget {
+                searchable: subpage == ClaudeSubpage::Mcp,
+            })];
+        match subpage {
+            ClaudeSubpage::Mcp => widgets.push(Box::new(McpWidget)),
+            ClaudeSubpage::Skills => widgets.push(Box::new(ItemsWidget::skills())),
+            ClaudeSubpage::Plugins => widgets.push(Box::new(PluginsWidget)),
+            ClaudeSubpage::Agents => widgets.push(Box::new(ItemsWidget::agents())),
+            ClaudeSubpage::Commands => widgets.push(Box::new(ItemsWidget::commands())),
+            ClaudeSubpage::Hooks => widgets.push(Box::new(HooksWidget)),
+            ClaudeSubpage::Settings => {
+                widgets.push(Box::new(SettingsFilesWidget));
+                widgets.push(Box::new(MemoryWidget));
+            }
+        }
+        let title = PageTitle::new(subpage.title())
+            .with_trailing_element(|view: &Self, _appearance, _app| view.render_header_controls());
+
+        let appearance = Appearance::as_ref(ctx);
+        let search_text = TextOptions::ui_text(Some(appearance.ui_font_size()), appearance);
+        let search_editor = ctx.add_typed_action_view(|ctx| {
+            let mut editor = EditorView::single_line(
+                SingleLineEditorOptions {
+                    text: search_text,
+                    propagate_and_no_op_vertical_navigation_keys:
+                        PropagateAndNoOpNavigationKeys::Always,
+                    ..Default::default()
+                },
+                ctx,
+            );
+            editor.set_placeholder_text(subpage.search_placeholder(), ctx);
+            editor
+        });
+        ctx.subscribe_to_view(&search_editor, |_, _, _, ctx| ctx.notify());
+        let search_bar = ctx.add_typed_action_view(|_| SearchBar::new(search_editor.clone()));
+
+        let new_button = subpage.new_label().map(|label| {
+            ctx.add_typed_action_view(|_| {
+                ActionButton::new(label, NakedTheme)
+                    .with_icon(Icon::Plus)
+                    .on_click(|ctx| ctx.dispatch_typed_action(ClaudeCodePageAction::OpenNewMenu))
+            })
+        });
+
+        let menu =
+            ctx.add_typed_action_view(|_| Menu::new().with_width(MENU_WIDTH).with_drop_shadow());
+        ctx.subscribe_to_view(&menu, |me, _, event, ctx| {
+            if let menu::Event::Close { .. } = event {
+                me.open_menu = None;
+                ctx.notify();
+            }
+        });
+
         Self {
+            subpage,
             page: PageType::new_uncategorized(widgets, Some(title)),
             snapshot: None,
             loading: false,
@@ -304,7 +466,12 @@ impl ClaudeCodePageView {
             pending_delete: None,
             generation: 0,
             mouse_states: Default::default(),
-            reload_mouse_state: Default::default(),
+            switch_states: Default::default(),
+            search_editor,
+            search_bar,
+            new_button,
+            menu,
+            open_menu: None,
         }
     }
 
@@ -979,35 +1146,6 @@ impl ClaudeCodePageView {
             .finish()
     }
 
-    /// "Abrir archivo" (when `can_open`) and "Copiar ruta". Existence comes from the snapshot so
-    /// rendering never touches the disk.
-    fn file_buttons(
-        &self,
-        appearance: &Appearance,
-        key: &str,
-        path: &Path,
-        can_open: bool,
-    ) -> Vec<Box<dyn Element>> {
-        let mut buttons = Vec::new();
-        if can_open {
-            buttons.push(self.button(
-                appearance,
-                format!("{key}:open"),
-                "Abrir archivo",
-                ClaudeCodePageAction::OpenFile(path.to_path_buf()),
-                ButtonVariant::Text,
-            ));
-        }
-        buttons.push(self.button(
-            appearance,
-            format!("{key}:copy"),
-            "Copiar ruta",
-            ClaudeCodePageAction::CopyPath(path.to_path_buf()),
-            ButtonVariant::Text,
-        ));
-        buttons
-    }
-
     fn delete_buttons(
         &self,
         appearance: &Appearance,
@@ -1148,6 +1286,18 @@ impl ClaudeCodePageView {
                 .finish(),
             );
         }
+        // MCP, hook and settings forms rewrite JSON files.
+        if !matches!(form.kind, FormKind::Markdown { .. }) {
+            column.add_child(
+                Container::new(small_text(
+                    appearance,
+                    KEY_ORDER_NOTE,
+                    sub_color(appearance),
+                ))
+                .with_margin_bottom(8.)
+                .finish(),
+            );
+        }
         if let Some(error) = &form.error {
             column.add_child(
                 Container::new(small_text(appearance, error, theme.ui_error_color()))
@@ -1181,27 +1331,282 @@ impl ClaudeCodePageView {
             .finish()
     }
 
-    fn render_section(
-        &self,
-        appearance: &Appearance,
-        title: &'static str,
-        actions: Vec<Box<dyn Element>>,
-        form_section: Option<FormSection>,
-        rows: Vec<Box<dyn Element>>,
-        empty_text: &str,
-    ) -> Box<dyn Element> {
-        let mut column = Flex::column().with_child(render_sub_header(appearance, title, None));
-        if !actions.is_empty() {
-            let mut wrap = Wrap::row().with_spacing(6.).with_run_spacing(6.);
-            for action in actions {
-                wrap.add_child(action);
+    fn switch_state(&self, key: &str) -> SwitchStateHandle {
+        self.switch_states
+            .borrow_mut()
+            .entry(key.to_owned())
+            .or_default()
+            .clone()
+    }
+
+    /// The page's search query, lowercased; empty when the search box is empty.
+    fn search_query(&self, app: &AppContext) -> String {
+        self.search_editor
+            .as_ref(app)
+            .buffer_text(app)
+            .trim()
+            .to_lowercase()
+    }
+
+    /// The options of the header's "+ Nuevo" button: one entry per scope that can be written.
+    fn new_options(&self) -> Vec<MenuEntry> {
+        let Some(snapshot) = &self.snapshot else {
+            return Vec::new();
+        };
+        let has_project = snapshot.paths.project.is_some();
+        match self.subpage {
+            ClaudeSubpage::Skills | ClaudeSubpage::Agents | ClaudeSubpage::Commands => {
+                let Some(kind) = self.subpage.kind() else {
+                    return Vec::new();
+                };
+                let mut options = vec![MenuEntry::new(
+                    "Usuario",
+                    ClaudeCodePageAction::NewItem {
+                        kind,
+                        project: false,
+                    },
+                )];
+                if has_project {
+                    options.push(MenuEntry::new(
+                        "Proyecto",
+                        ClaudeCodePageAction::NewItem {
+                            kind,
+                            project: true,
+                        },
+                    ));
+                }
+                options
             }
-            column.add_child(
-                Container::new(wrap.finish())
-                    .with_margin_bottom(ROW_SPACING)
-                    .finish(),
+            ClaudeSubpage::Mcp => {
+                let mut options = vec![MenuEntry::new(
+                    "Usuario",
+                    ClaudeCodePageAction::NewMcp(NewMcpScope::User),
+                )];
+                if has_project {
+                    options.push(MenuEntry::new(
+                        "Local (solo este proyecto)",
+                        ClaudeCodePageAction::NewMcp(NewMcpScope::Local),
+                    ));
+                    options.push(MenuEntry::new(
+                        "Proyecto (.mcp.json)",
+                        ClaudeCodePageAction::NewMcp(NewMcpScope::Project),
+                    ));
+                }
+                options
+            }
+            ClaudeSubpage::Hooks => [
+                SettingsScope::User,
+                SettingsScope::Project,
+                SettingsScope::Local,
+            ]
+            .into_iter()
+            .filter(|scope| snapshot.paths.settings_path(*scope).is_some())
+            .map(|scope| MenuEntry::new(scope.label(), ClaudeCodePageAction::NewHook(scope)))
+            .collect(),
+            ClaudeSubpage::Plugins | ClaudeSubpage::Settings => Vec::new(),
+        }
+    }
+
+    /// The "⋯" menu of a card, in the order Editar, Abrir archivo, Copiar ruta, Eliminar. Only
+    /// actions the entry supports are listed; read-only entries (plugins, managed files) get no
+    /// edit or delete.
+    fn card_menu_entries(&self, card: &CardRef) -> Vec<MenuEntry> {
+        let Some(snapshot) = &self.snapshot else {
+            return Vec::new();
+        };
+        let mut entries = Vec::new();
+        match card {
+            CardRef::Item(kind, index) => {
+                let (kind, index) = (*kind, *index);
+                let Some(item) = snapshot.items(kind).get(index) else {
+                    return entries;
+                };
+                let writable = !item.origin.is_read_only();
+                if writable && item.doc.is_some() {
+                    entries.push(MenuEntry::edit(ClaudeCodePageAction::EditItem {
+                        kind,
+                        index,
+                    }));
+                }
+                // A partial override (`name-only`, `user-invocable-only`…) shows the switch as on;
+                // removing it is a separate, explicit action so the switch never drops it silently.
+                if skill_toggle_allowed(item, snapshot)
+                    && let Some(state) = item
+                        .override_state
+                        .as_deref()
+                        .filter(|state| *state != "off")
+                {
+                    entries.push(
+                        MenuEntry::new(
+                            format!("Activar (quita \"{state}\")"),
+                            ClaudeCodePageAction::SetSkillEnabled {
+                                index,
+                                enabled: true,
+                            },
+                        )
+                        .with_icon(Icon::Check),
+                    );
+                }
+                entries.extend(file_entries(&item.path, true));
+                if writable {
+                    entries.push(MenuEntry::delete(DeleteTarget::Item(kind, index)));
+                }
+            }
+            CardRef::Mcp(index) => {
+                let Some(server) = snapshot.mcp_servers.get(*index) else {
+                    return entries;
+                };
+                let writable = !server.scope.is_read_only();
+                if writable && mcp_form_transport(&server.raw).is_some() {
+                    entries.push(MenuEntry::edit(ClaudeCodePageAction::EditMcp(*index)));
+                }
+                entries.extend(file_entries(&server.path, true));
+                if writable {
+                    entries.push(MenuEntry::delete(DeleteTarget::Mcp(*index)));
+                }
+            }
+            CardRef::Plugin(index) => {
+                if let Some(path) = snapshot
+                    .plugins
+                    .get(*index)
+                    .and_then(|plugin| plugin.install_path.as_ref())
+                {
+                    entries.extend(file_entries(path, false));
+                }
+            }
+            CardRef::Marketplace(index) => {
+                if let Some(path) = snapshot
+                    .marketplaces
+                    .get(*index)
+                    .and_then(|marketplace| marketplace.install_location.as_ref())
+                {
+                    entries.extend(file_entries(path, false));
+                }
+            }
+            CardRef::Hook(index) => {
+                let Some(hook) = snapshot.hooks.get(*index) else {
+                    return entries;
+                };
+                let editable = hook_is_editable(hook);
+                if editable {
+                    entries.push(MenuEntry::edit(ClaudeCodePageAction::EditHook(*index)));
+                }
+                entries.extend(file_entries(&hook.path, true));
+                if editable {
+                    entries.push(MenuEntry::delete(DeleteTarget::Hook(*index)));
+                }
+            }
+            CardRef::SettingsFile(scope) => {
+                let Some(file) = snapshot.settings.iter().find(|file| file.scope == *scope) else {
+                    return entries;
+                };
+                if file.scope.is_writable() && file.error.is_none() {
+                    entries.push(
+                        MenuEntry::new(
+                            "Editar valores comunes",
+                            ClaudeCodePageAction::EditSettings(file.scope),
+                        )
+                        .with_icon(Icon::Pencil),
+                    );
+                }
+                entries.extend(file_entries(&file.path, file.exists));
+            }
+            CardRef::Memory(index) => {
+                if let Some(file) = snapshot.memory_files.get(*index) {
+                    entries.extend(file_entries(&file.path, file.exists));
+                }
+            }
+        }
+        entries
+    }
+
+    fn show_menu(
+        &mut self,
+        anchor: MenuAnchor,
+        entries: Vec<MenuEntry>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let error_color = Appearance::as_ref(ctx).theme().ui_error_color();
+        let items: Vec<MenuItem<ClaudeCodePageAction>> = entries
+            .into_iter()
+            .map(|entry| {
+                let mut fields =
+                    MenuItemFields::new(entry.label).with_on_select_action(entry.action);
+                if let Some(icon) = entry.icon {
+                    fields = fields.with_icon(icon);
+                }
+                if entry.danger {
+                    fields = fields.with_override_text_color(error_color);
+                }
+                MenuItem::Item(fields)
+            })
+            .collect();
+        self.menu
+            .update(ctx, |menu, ctx| menu.set_items(items, ctx));
+        self.open_menu = Some(anchor);
+        ctx.notify();
+    }
+
+    fn close_menu(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.open_menu.take().is_some() {
+            ctx.notify();
+        }
+    }
+
+    /// Wraps `anchor_element` so the page's menu drops down from it when `anchor` is open.
+    fn with_menu_overlay(
+        &self,
+        anchor_element: Box<dyn Element>,
+        anchor: &MenuAnchor,
+    ) -> Box<dyn Element> {
+        let mut stack = Stack::new();
+        stack.add_child(anchor_element);
+        if self.open_menu.as_ref() == Some(anchor) {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.menu).finish(),
+                OffsetPositioning::offset_from_parent(
+                    vec2f(0., 4.),
+                    ParentOffsetBounds::WindowByPosition,
+                    ParentAnchor::BottomRight,
+                    ChildAnchor::TopRight,
+                ),
             );
         }
+        stack.finish()
+    }
+
+    /// The title's trailing controls: the search box and, where the subpage creates entries, the
+    /// "+ Nuevo" button.
+    fn render_header_controls(&self) -> Box<dyn Element> {
+        let mut row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
+        row.add_child(
+            ConstrainedBox::new(ChildView::new(&self.search_bar).finish())
+                .with_width(SEARCH_BAR_WIDTH)
+                .finish(),
+        );
+        if let Some(button) = &self.new_button {
+            row.add_child(
+                Container::new(
+                    self.with_menu_overlay(ChildView::new(button).finish(), &MenuAnchor::New),
+                )
+                .with_margin_left(8.)
+                .finish(),
+            );
+        }
+        row.finish()
+    }
+
+    /// The open form (when it belongs here), then the cards, or the loading / empty / no-match
+    /// text.
+    fn render_list(
+        &self,
+        appearance: &Appearance,
+        form_section: Option<FormSection>,
+        cards: Vec<Box<dyn Element>>,
+        total: usize,
+        empty_text: &str,
+    ) -> Box<dyn Element> {
+        let mut column = Flex::column();
         if let Some(form) =
             form_section.and_then(|section| self.render_form_if(section, appearance))
         {
@@ -1209,132 +1614,359 @@ impl ClaudeCodePageView {
         }
         if self.snapshot.is_none() {
             column.add_child(small_text(appearance, "Cargando…", sub_color(appearance)));
-        } else if rows.is_empty() {
+        } else if total == 0 {
             column.add_child(small_text(appearance, empty_text, sub_color(appearance)));
+        } else if cards.is_empty() {
+            column.add_child(small_text(
+                appearance,
+                "Nada coincide con la búsqueda.",
+                sub_color(appearance),
+            ));
         } else {
-            for row in rows {
-                column.add_child(row);
+            for card in cards {
+                column.add_child(card);
             }
         }
-        column.add_child(
-            Container::new(render_separator(appearance))
-                .with_margin_top(HEADER_PADDING)
-                .finish(),
+        Container::new(column.finish())
+            .with_margin_bottom(HEADER_PADDING)
+            .finish()
+    }
+
+    fn render_card(&self, card: Card, appearance: &Appearance) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let mut title_row = Wrap::row()
+            .with_spacing(CARD_INTERIOR_SPACING)
+            .with_run_spacing(CARD_INTERIOR_SPACING)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center);
+        title_row.add_child(
+            Text::new(
+                card.title,
+                appearance.ui_font_family(),
+                appearance.ui_builder().ui_font_size(),
+            )
+            .with_color(blended_colors::text_main(theme, theme.surface_1()))
+            .with_style(Properties::default().weight(Weight::Bold))
+            .finish(),
         );
-        column.finish()
-    }
+        for chip in &card.chips {
+            title_row.add_child(render_chip(appearance, chip));
+        }
 
-    fn render_item_rows(&self, kind: MdKind, appearance: &Appearance) -> Vec<Box<dyn Element>> {
-        let Some(snapshot) = &self.snapshot else {
-            return Vec::new();
-        };
-        snapshot
-            .items(kind)
-            .iter()
-            .enumerate()
-            .map(|(index, item)| {
-                let key = format!("{}:{index}", kind.subdir());
-                let mut badges = vec![item.origin.label()];
-                if let Some(state) = &item.override_state {
-                    badges.push(format!("skillOverrides: {state}"));
-                }
-                let mut buttons = Vec::new();
-                if !item.origin.is_read_only() {
-                    if item.doc.is_some() {
-                        buttons.push(self.button(
-                            appearance,
-                            format!("{key}:edit"),
-                            "Editar",
-                            ClaudeCodePageAction::EditItem { kind, index },
-                            ButtonVariant::Secondary,
-                        ));
-                    }
-                    if kind == MdKind::Skill
-                        && (item.origin == ItemOrigin::User || snapshot.paths.project.is_some())
-                    {
-                        // Partial overrides (`name-only`, `user-invocable-only`…) get explicit
-                        // labels so neither button silently replaces them.
-                        let (enable_label, disable_label) = match item.override_state.as_deref() {
-                            None => (None, Some("Desactivar".to_owned())),
-                            Some("off") => (Some("Activar".to_owned()), None),
-                            Some(state) => (
-                                Some(format!("Activar (quita \"{state}\")")),
-                                Some(format!("Desactivar (reemplaza \"{state}\")")),
-                            ),
-                        };
-                        if let Some(label) = enable_label {
-                            buttons.push(self.button(
-                                appearance,
-                                format!("{key}:enable"),
-                                &label,
-                                ClaudeCodePageAction::SetSkillEnabled {
-                                    index,
-                                    enabled: true,
-                                },
-                                ButtonVariant::Secondary,
-                            ));
-                        }
-                        if let Some(label) = disable_label {
-                            buttons.push(self.button(
-                                appearance,
-                                format!("{key}:disable"),
-                                &label,
-                                ClaudeCodePageAction::SetSkillEnabled {
-                                    index,
-                                    enabled: false,
-                                },
-                                ButtonVariant::Secondary,
-                            ));
-                        }
-                    }
-                    buttons.extend(self.delete_buttons(
-                        appearance,
-                        &key,
-                        DeleteTarget::Item(kind, index),
-                    ));
-                }
-                buttons.extend(self.file_buttons(appearance, &key, &item.path, true));
-                render_row(
-                    appearance,
-                    &item.name,
-                    &badges,
-                    item.description(),
-                    item.error.as_deref(),
-                    buttons,
-                )
-            })
-            .collect()
-    }
-
-    fn new_item_buttons(&self, kind: MdKind, appearance: &Appearance) -> Vec<Box<dyn Element>> {
-        let mut buttons = vec![self.button(
-            appearance,
-            format!("{}:new:user", kind.subdir()),
-            &format!("Nuevo {} (usuario)", kind.label()),
-            ClaudeCodePageAction::NewItem {
-                kind,
-                project: false,
-            },
-            ButtonVariant::Secondary,
-        )];
-        if self
-            .snapshot
-            .as_ref()
-            .is_some_and(|snapshot| snapshot.paths.project.is_some())
+        let mut info = Flex::column()
+            .with_spacing(CARD_INTERIOR_SPACING)
+            .with_child(title_row.finish());
+        if let Some(description) = card
+            .description
+            .filter(|description| !description.trim().is_empty())
         {
-            buttons.push(self.button(
+            info.add_child(if card.full_text {
+                small_text(appearance, &description, sub_color(appearance))
+            } else {
+                render_clamped_text(appearance, &description)
+            });
+        }
+        if let Some(detail) = card.detail {
+            info.add_child(small_text(appearance, &detail, sub_color(appearance)));
+        }
+        if let Some(error) = card.error {
+            info.add_child(small_text(
                 appearance,
-                format!("{}:new:project", kind.subdir()),
-                &format!("Nuevo {} (proyecto)", kind.label()),
-                ClaudeCodePageAction::NewItem {
-                    kind,
-                    project: true,
-                },
-                ButtonVariant::Secondary,
+                &format!("Error: {error}"),
+                theme.ui_error_color(),
             ));
         }
-        buttons
+
+        let mut actions = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_alignment(MainAxisAlignment::End)
+            .with_spacing(8.);
+        if let Some((checked, action)) = card.toggle {
+            let mut switch = appearance
+                .ui_builder()
+                .switch(self.switch_state(&card.key))
+                .check(checked);
+            if self.busy {
+                switch = switch.disable();
+            }
+            actions.add_child(
+                switch
+                    .build()
+                    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+                    .finish(),
+            );
+        }
+        if let Some(card_ref) = card
+            .menu
+            .filter(|card_ref| !self.card_menu_entries(card_ref).is_empty())
+        {
+            let anchor = MenuAnchor::Card(card_ref.clone());
+            let is_open = self.open_menu.as_ref() == Some(&anchor);
+            let button = icon_button(
+                appearance,
+                Icon::DotsHorizontal,
+                is_open,
+                self.mouse_state(&format!("{}:menu", card.key)),
+            )
+            .build()
+            .on_click(move |ctx, _, _| {
+                ctx.dispatch_typed_action(if is_open {
+                    ClaudeCodePageAction::CloseMenu
+                } else {
+                    ClaudeCodePageAction::OpenCardMenu(card_ref.clone())
+                })
+            })
+            .finish();
+            actions.add_child(self.with_menu_overlay(button, &anchor));
+        }
+
+        let mut body = Flex::column()
+            .with_spacing(CARD_INTERIOR_SPACING)
+            .with_child(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_spacing(CARD_INTERIOR_SPACING)
+                    .with_child(Expanded::new(1., info.finish()).finish())
+                    .with_child(actions.finish())
+                    .finish(),
+            );
+        if let Some(target) = card
+            .delete_target
+            .filter(|target| self.pending_delete == Some(*target))
+        {
+            let mut confirm = Wrap::row()
+                .with_spacing(6.)
+                .with_run_spacing(6.)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center);
+            confirm.add_child(small_text(
+                appearance,
+                "¿Eliminar? Antes se guarda una copia de respaldo.",
+                theme.ui_warning_color(),
+            ));
+            for button in self.delete_buttons(appearance, &card.key, target) {
+                confirm.add_child(button);
+            }
+            body.add_child(
+                Container::new(confirm.finish())
+                    .with_margin_top(4.)
+                    .finish(),
+            );
+        }
+
+        Container::new(body.finish())
+            .with_uniform_padding(CARD_PADDING)
+            .with_background(theme.surface_1())
+            .with_border(Border::all(1.).with_border_fill(theme.outline()))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(CARD_CORNER_RADIUS)))
+            .with_margin_bottom(CARD_SPACING)
+            .finish()
     }
+
+    /// Cards for the skills, subagents or slash commands that match `query`, plus the total.
+    fn item_cards(
+        &self,
+        kind: MdKind,
+        query: &str,
+        appearance: &Appearance,
+    ) -> (Vec<Box<dyn Element>>, usize) {
+        let Some(snapshot) = &self.snapshot else {
+            return (Vec::new(), 0);
+        };
+        let items = snapshot.items(kind);
+        let cards = items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| matches_query(query, &item.name, item.description().as_deref()))
+            .map(|(index, item)| {
+                let mut card = Card::new(format!("{}:{index}", kind.subdir()), item.name.clone());
+                card.menu = Some(CardRef::Item(kind, index));
+                card.chips.push(item.origin.label());
+                if let Some(state) = &item.override_state {
+                    card.chips.push(format!("skillOverrides: {state}"));
+                }
+                card.description = item.description();
+                card.error = item.error.clone();
+                if skill_toggle_allowed(item, snapshot) {
+                    let enabled = item.override_state.as_deref() != Some("off");
+                    card.toggle = Some((
+                        enabled,
+                        ClaudeCodePageAction::SetSkillEnabled {
+                            index,
+                            enabled: !enabled,
+                        },
+                    ));
+                }
+                if !item.origin.is_read_only() {
+                    card.delete_target = Some(DeleteTarget::Item(kind, index));
+                }
+                self.render_card(card, appearance)
+            })
+            .collect();
+        (cards, items.len())
+    }
+}
+
+/// One entry of the page's dropdown menu.
+struct MenuEntry {
+    label: String,
+    action: ClaudeCodePageAction,
+    icon: Option<Icon>,
+    danger: bool,
+}
+
+impl MenuEntry {
+    fn new(label: impl Into<String>, action: ClaudeCodePageAction) -> Self {
+        Self {
+            label: label.into(),
+            action,
+            icon: None,
+            danger: false,
+        }
+    }
+
+    fn with_icon(mut self, icon: Icon) -> Self {
+        self.icon = Some(icon);
+        self
+    }
+
+    fn edit(action: ClaudeCodePageAction) -> Self {
+        Self::new("Editar", action).with_icon(Icon::Pencil)
+    }
+
+    fn delete(target: DeleteTarget) -> Self {
+        Self {
+            danger: true,
+            ..Self::new("Eliminar", ClaudeCodePageAction::RequestDelete(target))
+                .with_icon(Icon::Trash)
+        }
+    }
+}
+
+/// "Abrir archivo" (when `can_open`) and "Copiar ruta". Existence comes from the snapshot so
+/// rendering never touches the disk.
+fn file_entries(path: &Path, can_open: bool) -> Vec<MenuEntry> {
+    let mut entries = Vec::new();
+    if can_open {
+        entries.push(
+            MenuEntry::new(
+                "Abrir archivo",
+                ClaudeCodePageAction::OpenFile(path.to_path_buf()),
+            )
+            .with_icon(Icon::File),
+        );
+    }
+    entries.push(
+        MenuEntry::new(
+            "Copiar ruta",
+            ClaudeCodePageAction::CopyPath(path.to_path_buf()),
+        )
+        .with_icon(Icon::Copy),
+    );
+    entries
+}
+
+/// Everything a card shows. Cards without a `menu` (informational ones) have no "⋯" button.
+struct Card {
+    /// Stable id for the card's mouse and switch states.
+    key: String,
+    title: String,
+    chips: Vec<String>,
+    description: Option<String>,
+    /// An extra, unclamped line under the description.
+    detail: Option<String>,
+    error: Option<String>,
+    /// The switch state and the action that flips it.
+    toggle: Option<(bool, ClaudeCodePageAction)>,
+    menu: Option<CardRef>,
+    /// Shows the inline delete confirmation while this target is pending.
+    delete_target: Option<DeleteTarget>,
+    /// Shows the whole description instead of cutting it to two lines.
+    full_text: bool,
+}
+
+impl Card {
+    fn new(key: String, title: String) -> Self {
+        Self {
+            key,
+            title,
+            chips: Vec::new(),
+            description: None,
+            detail: None,
+            error: None,
+            toggle: None,
+            menu: None,
+            delete_target: None,
+            full_text: false,
+        }
+    }
+}
+
+impl ClaudeSubpage {
+    /// The markdown kind listed by the skills, subagents and commands subpages.
+    fn kind(self) -> Option<MdKind> {
+        match self {
+            ClaudeSubpage::Skills => Some(MdKind::Skill),
+            ClaudeSubpage::Agents => Some(MdKind::Agent),
+            ClaudeSubpage::Commands => Some(MdKind::Command),
+            ClaudeSubpage::Mcp
+            | ClaudeSubpage::Plugins
+            | ClaudeSubpage::Hooks
+            | ClaudeSubpage::Settings => None,
+        }
+    }
+}
+
+/// Whether every word of `query` (already lowercased) appears in `name` or `description`.
+fn matches_query(query: &str, name: &str, description: Option<&str>) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    let haystack = format!("{name} {}", description.unwrap_or_default()).to_lowercase();
+    query.split_whitespace().all(|word| haystack.contains(word))
+}
+
+/// Skills can be switched on and off through `skillOverrides` (user skills always, project skills
+/// when a project is open); plugin skills and other kinds cannot.
+fn skill_toggle_allowed(item: &MdItem, snapshot: &ClaudeSnapshot) -> bool {
+    item.kind == MdKind::Skill
+        && !item.origin.is_read_only()
+        && (item.origin == ItemOrigin::User || snapshot.paths.project.is_some())
+}
+
+/// Only `command` hooks in a writable settings file can be edited or deleted here.
+fn hook_is_editable(hook: &HookItem) -> bool {
+    matches!(hook.source, HookSource::Settings(scope) if scope.is_writable())
+        && hook.hook_type == "command"
+}
+
+fn render_chip(appearance: &Appearance, text: &str) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    Container::new(
+        Text::new(text.to_owned(), appearance.ui_font_family(), CHIP_FONT_SIZE)
+            .with_color(theme.sub_text_color(theme.surface_3()).into_solid())
+            .finish(),
+    )
+    .with_background(theme.surface_3())
+    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(3.)))
+    .with_horizontal_padding(4.)
+    .with_vertical_padding(1.)
+    .finish()
+}
+
+/// `text` on at most [`DESCRIPTION_LINES`] lines: whitespace is collapsed, long text is cut with an
+/// ellipsis, and the element is clipped to the line height.
+fn render_clamped_text(appearance: &Appearance, text: &str) -> Box<dyn Element> {
+    let collapsed = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let shown = if collapsed.chars().count() > DESCRIPTION_MAX_CHARS {
+        let cut: String = collapsed.chars().take(DESCRIPTION_MAX_CHARS).collect();
+        format!("{}…", cut.trim_end())
+    } else {
+        collapsed
+    };
+    ConstrainedBox::new(
+        Clipped::new(small_text(appearance, &shown, sub_color(appearance))).finish(),
+    )
+    .with_max_height(DESCRIPTION_LINES * CONTENT_FONT_SIZE * LINE_HEIGHT_RATIO + 1.)
+    .finish()
 }
 
 fn hook_location(hook: &HookItem) -> HookLocation {
@@ -1374,82 +2006,6 @@ fn display_path(path: &Path, home: Option<&Path>) -> String {
     path.display().to_string()
 }
 
-fn render_row(
-    appearance: &Appearance,
-    title: &str,
-    badges: &[String],
-    subtitle: Option<String>,
-    error: Option<&str>,
-    buttons: Vec<Box<dyn Element>>,
-) -> Box<dyn Element> {
-    let theme = appearance.theme();
-    let mut header = Flex::row()
-        .with_main_axis_size(MainAxisSize::Max)
-        .with_cross_axis_alignment(CrossAxisAlignment::Center)
-        .with_child(
-            Shrinkable::new(
-                1.,
-                Text::new(
-                    title.to_owned(),
-                    appearance.ui_font_family(),
-                    TITLE_FONT_SIZE,
-                )
-                .with_color(theme.active_ui_text_color().into_solid())
-                .with_style(Properties::default().weight(Weight::Semibold))
-                .finish(),
-            )
-            .finish(),
-        );
-    if !badges.is_empty() {
-        header.add_child(
-            Container::new(small_text(
-                appearance,
-                &badges.join(" · "),
-                sub_color(appearance),
-            ))
-            .with_margin_left(8.)
-            .finish(),
-        );
-    }
-    let mut column = Flex::column().with_child(header.finish());
-    if let Some(subtitle) = subtitle.filter(|subtitle| !subtitle.trim().is_empty()) {
-        column.add_child(
-            Container::new(small_text(appearance, &subtitle, sub_color(appearance)))
-                .with_margin_top(2.)
-                .finish(),
-        );
-    }
-    if let Some(error) = error {
-        column.add_child(
-            Container::new(small_text(
-                appearance,
-                &format!("Error: {error}"),
-                theme.ui_error_color(),
-            ))
-            .with_margin_top(2.)
-            .finish(),
-        );
-    }
-    if !buttons.is_empty() {
-        let mut wrap = Wrap::row().with_spacing(4.).with_run_spacing(4.);
-        for button in buttons {
-            wrap.add_child(button);
-        }
-        column.add_child(Container::new(wrap.finish()).with_margin_top(4.).finish());
-    }
-    Container::new(column.finish())
-        .with_padding_bottom(ROW_SPACING)
-        .with_margin_bottom(ROW_SPACING)
-        .with_border(Border::bottom(1.).with_border_fill(theme.outline()))
-        .finish()
-}
-
-impl Default for ClaudeCodePageView {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Entity for ClaudeCodePageView {
     type Event = ClaudeCodePageEvent;
 }
@@ -1463,6 +2019,30 @@ impl TypedActionView for ClaudeCodePageView {
                 self.status = None;
                 self.reload(ctx);
             }
+            ClaudeCodePageAction::OpenNewMenu => {
+                if self.open_menu == Some(MenuAnchor::New) {
+                    self.close_menu(ctx);
+                    return;
+                }
+                let mut options = self.new_options();
+                // A single scope needs no menu: create right away.
+                if options.len() == 1 {
+                    let action = options.remove(0).action;
+                    self.close_menu(ctx);
+                    self.handle_action(&action, ctx);
+                } else if !options.is_empty() {
+                    self.show_menu(MenuAnchor::New, options, ctx);
+                }
+            }
+            ClaudeCodePageAction::OpenCardMenu(card) => {
+                let entries = self.card_menu_entries(card);
+                if entries.is_empty() {
+                    self.close_menu(ctx);
+                } else {
+                    self.show_menu(MenuAnchor::Card(card.clone()), entries, ctx);
+                }
+            }
+            ClaudeCodePageAction::CloseMenu => self.close_menu(ctx),
             ClaudeCodePageAction::OpenFile(path) => {
                 ctx.emit(ClaudeCodePageEvent::OpenFile(path.clone()));
             }
@@ -1726,13 +2306,24 @@ impl From<ViewHandle<ClaudeCodePageView>> for SettingsPageViewHandle {
 
 // ── Widgets ────────────────────────────────────────────────────────────
 
-struct OverviewWidget;
+/// The discreet status area under the title: folders, backups, errors, the last result and the
+/// reload buttons.
+struct OverviewWidget {
+    /// Only one subpage carries the overview's search terms, so a settings search for "backup"
+    /// lists one page instead of all of them.
+    searchable: bool,
+}
 
 impl SettingsWidget for OverviewWidget {
     type View = ClaudeCodePageView;
 
     fn search_terms(&self) -> &str {
-        "claude code configuración proyecto usuario carpeta config dir recargar copias respaldo backup"
+        if self.searchable {
+            "claude code configuración proyecto usuario carpeta config dir recargar copias \
+             respaldo backup"
+        } else {
+            ""
+        }
     }
 
     fn render(
@@ -1742,140 +2333,150 @@ impl SettingsWidget for OverviewWidget {
         _app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
-        let mut column = Flex::column();
+        let muted = sub_color(appearance);
+        let mut info = Flex::column().with_spacing(2.);
         match &view.snapshot {
             Some(snapshot) => {
                 let paths = &snapshot.paths;
                 let home = snapshot.home_dir.as_deref();
-                column.add_child(small_text(
-                    appearance,
-                    &format!(
-                        "Carpeta de usuario: {}",
-                        display_path(&paths.config_dir, home)
-                    ),
-                    sub_color(appearance),
-                ));
                 let project = match &paths.project {
-                    Some(project) => format!("Proyecto: {}", display_path(&project.root, home)),
-                    None => "Proyecto: ninguno (enfoca una pestaña de terminal dentro de un \
-                             proyecto y pulsa Recargar)"
+                    Some(project) => display_path(&project.root, home),
+                    None => "ninguno (enfoca una pestaña de terminal dentro de un proyecto y \
+                             pulsa Recargar)"
                         .to_owned(),
                 };
-                column.add_child(small_text(appearance, &project, sub_color(appearance)));
-                column.add_child(small_text(
+                info.add_child(small_text(
+                    appearance,
+                    &format!(
+                        "Usuario: {} · Proyecto: {project}",
+                        display_path(&paths.config_dir, home)
+                    ),
+                    muted,
+                ));
+                info.add_child(small_text(
                     appearance,
                     &format!(
                         "Cada cambio guarda antes una copia en {}",
                         display_path(&paths.backups_dir(), home)
                     ),
-                    sub_color(appearance),
-                ));
-                column.add_child(small_text(
-                    appearance,
-                    KEY_ORDER_NOTE,
-                    sub_color(appearance),
+                    muted,
                 ));
                 if let Some(error) = &snapshot.claude_json_error {
-                    column.add_child(small_text(
+                    info.add_child(small_text(
                         appearance,
                         &format!("{}: {error}", display_path(&paths.claude_json, home)),
                         theme.ui_error_color(),
                     ));
                 }
                 for warning in &snapshot.warnings {
-                    column.add_child(small_text(appearance, warning, theme.ui_warning_color()));
+                    info.add_child(small_text(appearance, warning, theme.ui_warning_color()));
                 }
             }
-            None => column.add_child(small_text(appearance, "Cargando…", sub_color(appearance))),
+            None => info.add_child(small_text(appearance, "Cargando…", muted)),
         }
         match &view.status {
             Some(Status::Success(message)) => {
-                column.add_child(small_text(appearance, message, theme.ui_green_color()))
+                info.add_child(small_text(appearance, message, theme.ui_green_color()))
             }
             Some(Status::Error(message)) => {
-                column.add_child(small_text(appearance, message, theme.ui_error_color()))
+                info.add_child(small_text(appearance, message, theme.ui_error_color()))
             }
             None => {}
         }
         if view.show_reload_hint {
-            column.add_child(
-                Container::new(small_text(
-                    appearance,
-                    RELOAD_HINT,
-                    theme.ui_warning_color(),
-                ))
-                .with_margin_top(4.)
-                .finish(),
-            );
-            column.add_child(
-                Container::new(
-                    appearance
-                        .ui_builder()
-                        .button(
-                            ButtonVariant::Accent,
-                            view.mouse_state("reload_claude_in_all_tabs"),
-                        )
-                        .with_text_label(RELOAD_ALL_TABS_LABEL.to_owned())
-                        .with_style(UiComponentStyles {
-                            font_size: Some(CONTENT_FONT_SIZE),
-                            padding: Some(Coords::uniform(4.).left(8.).right(8.)),
-                            ..Default::default()
-                        })
-                        .build()
-                        .on_click(|ctx, _, _| {
-                            ctx.dispatch_typed_action(WorkspaceAction::ReloadClaudeInAllTabs)
-                        })
-                        .finish(),
-                )
-                .with_margin_top(4.)
-                .finish(),
-            );
+            info.add_child(small_text(
+                appearance,
+                RELOAD_HINT,
+                theme.ui_warning_color(),
+            ));
         }
-        Container::new(column.finish())
-            .with_margin_bottom(HEADER_PADDING)
-            .finish()
-    }
-}
 
-struct SkillsWidget;
+        let small_button = |variant, key: &str, label: &str| {
+            appearance
+                .ui_builder()
+                .button(variant, view.mouse_state(key))
+                .with_text_label(label.to_owned())
+                .with_style(UiComponentStyles {
+                    font_size: Some(CONTENT_FONT_SIZE),
+                    padding: Some(Coords::uniform(4.).left(8.).right(8.)),
+                    ..Default::default()
+                })
+        };
+        let mut reload = small_button(
+            ButtonVariant::Text,
+            "reload_snapshot",
+            if view.loading {
+                "Cargando…"
+            } else {
+                "Recargar"
+            },
+        );
+        if view.loading || view.busy {
+            reload = reload.disabled();
+        }
+        let reload_all_tabs = small_button(
+            if view.show_reload_hint {
+                ButtonVariant::Accent
+            } else {
+                ButtonVariant::Text
+            },
+            "reload_claude_in_all_tabs",
+            RELOAD_ALL_TABS_LABEL,
+        );
+        let buttons = Wrap::row()
+            .with_spacing(4.)
+            .with_run_spacing(4.)
+            .with_child(
+                reload
+                    .build()
+                    .on_click(|ctx, _, _| ctx.dispatch_typed_action(ClaudeCodePageAction::Reload))
+                    .finish(),
+            )
+            .with_child(
+                reload_all_tabs
+                    .build()
+                    .on_click(|ctx, _, _| {
+                        ctx.dispatch_typed_action(WorkspaceAction::ReloadClaudeInAllTabs)
+                    })
+                    .finish(),
+            )
+            .finish();
 
-impl SettingsWidget for SkillsWidget {
-    type View = ClaudeCodePageView;
-
-    fn search_terms(&self) -> &str {
-        "claude code skills skill.md habilidades crear editar eliminar desactivar skilloverrides"
-    }
-
-    fn render(
-        &self,
-        view: &Self::View,
-        appearance: &Appearance,
-        _app: &AppContext,
-    ) -> Box<dyn Element> {
-        view.render_section(
-            appearance,
-            "Skills",
-            view.new_item_buttons(MdKind::Skill, appearance),
-            Some(FormSection::Items(MdKind::Skill)),
-            view.render_item_rows(MdKind::Skill, appearance),
-            "No hay skills.",
+        Container::new(
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                .with_spacing(8.)
+                .with_child(Expanded::new(1., info.finish()).finish())
+                .with_child(buttons)
+                .finish(),
         )
+        .with_padding_bottom(ROW_SPACING)
+        .with_margin_bottom(HEADER_PADDING)
+        .with_border(Border::bottom(1.).with_border_fill(theme.outline()))
+        .finish()
     }
 }
 
-/// Subagents or slash commands.
+/// Skills, subagents or slash commands.
 struct ItemsWidget {
     kind: MdKind,
-    title: &'static str,
     search_terms: &'static str,
     empty_text: &'static str,
 }
 
 impl ItemsWidget {
+    fn skills() -> Self {
+        Self {
+            kind: MdKind::Skill,
+            search_terms: "claude code skills skill.md habilidades crear editar eliminar \
+                           desactivar skilloverrides",
+            empty_text: "No hay skills.",
+        }
+    }
+
     fn agents() -> Self {
         Self {
             kind: MdKind::Agent,
-            title: "Subagentes",
             search_terms: "claude code subagentes subagents agents agentes crear editar eliminar",
             empty_text: "No hay subagentes.",
         }
@@ -1884,7 +2485,6 @@ impl ItemsWidget {
     fn commands() -> Self {
         Self {
             kind: MdKind::Command,
-            title: "Comandos slash",
             search_terms: "claude code comandos slash commands crear editar eliminar",
             empty_text: "No hay comandos slash.",
         }
@@ -1910,14 +2510,14 @@ impl SettingsWidget for ItemsWidget {
         &self,
         view: &Self::View,
         appearance: &Appearance,
-        _app: &AppContext,
+        app: &AppContext,
     ) -> Box<dyn Element> {
-        view.render_section(
+        let (cards, total) = view.item_cards(self.kind, &view.search_query(app), appearance);
+        view.render_list(
             appearance,
-            self.title,
-            view.new_item_buttons(self.kind, appearance),
             Some(FormSection::Items(self.kind)),
-            view.render_item_rows(self.kind, appearance),
+            cards,
+            total,
             self.empty_text,
         )
     }
@@ -1936,49 +2536,26 @@ impl SettingsWidget for McpWidget {
         &self,
         view: &Self::View,
         appearance: &Appearance,
-        _app: &AppContext,
+        app: &AppContext,
     ) -> Box<dyn Element> {
-        let mut actions = vec![view.button(
-            appearance,
-            "mcp:new:user".to_owned(),
-            "Nuevo servidor (usuario)",
-            ClaudeCodePageAction::NewMcp(NewMcpScope::User),
-            ButtonVariant::Secondary,
-        )];
-        let mut rows = Vec::new();
+        let query = view.search_query(app);
+        let mut cards = Vec::new();
+        let mut total = 0;
         if let Some(snapshot) = &view.snapshot {
-            if snapshot.paths.project.is_some() {
-                actions.push(view.button(
-                    appearance,
-                    "mcp:new:local".to_owned(),
-                    "Nuevo servidor (local)",
-                    ClaudeCodePageAction::NewMcp(NewMcpScope::Local),
-                    ButtonVariant::Secondary,
-                ));
-                actions.push(view.button(
-                    appearance,
-                    "mcp:new:project".to_owned(),
-                    "Nuevo servidor (proyecto, .mcp.json)",
-                    ClaudeCodePageAction::NewMcp(NewMcpScope::Project),
-                    ButtonVariant::Secondary,
-                ));
-            }
+            total = snapshot.mcp_servers.len();
             for (index, server) in snapshot.mcp_servers.iter().enumerate() {
-                let key = format!("mcp:{index}");
-                let state = match server.state {
-                    McpState::Enabled => "activo",
-                    McpState::Disabled => "desactivado",
-                    McpState::PendingApproval => "pendiente de aprobación",
-                };
-                let badges = vec![
-                    server.scope.label(),
-                    server.transport.clone(),
-                    state.to_owned(),
-                ];
-                let mut subtitle = server.summary();
+                let summary = server.summary();
+                if !matches_query(&query, &server.name, Some(&summary)) {
+                    continue;
+                }
+                let mut card = Card::new(format!("mcp:{index}"), server.name.clone());
+                card.menu = Some(CardRef::Mcp(index));
+                card.chips = vec![server.scope.label(), server.transport.clone()];
+                card.description = Some(summary);
+                let mut secrets = Vec::new();
                 if !server.env_keys.is_empty() {
-                    subtitle.push_str(&format!(
-                        "\nenv: {}",
+                    secrets.push(format!(
+                        "env: {}",
                         server
                             .env_keys
                             .iter()
@@ -1988,8 +2565,8 @@ impl SettingsWidget for McpWidget {
                     ));
                 }
                 if !server.header_keys.is_empty() {
-                    subtitle.push_str(&format!(
-                        "\nheaders: {}",
+                    secrets.push(format!(
+                        "headers: {}",
                         server
                             .header_keys
                             .iter()
@@ -1998,56 +2575,46 @@ impl SettingsWidget for McpWidget {
                             .join(", ")
                     ));
                 }
-                let mut buttons = Vec::new();
-                if !server.scope.is_read_only() {
-                    if mcp_form_transport(&server.raw).is_some() {
-                        buttons.push(view.button(
-                            appearance,
-                            format!("{key}:edit"),
-                            "Editar",
-                            ClaudeCodePageAction::EditMcp(index),
-                            ButtonVariant::Secondary,
-                        ));
-                    }
-                    let can_toggle = match server.scope {
+                if !secrets.is_empty() {
+                    card.detail = Some(secrets.join(" · "));
+                }
+                let writable = !server.scope.is_read_only();
+                // User and local servers are switched off per project (`disabledMcpServers`), so
+                // they need an open project; `.mcp.json` approval also lives in the project.
+                let can_toggle = writable
+                    && match server.scope {
                         McpScope::Project | McpScope::User | McpScope::Local(_) => {
                             snapshot.paths.project.is_some()
                         }
                         McpScope::Plugin(_) => false,
                     };
-                    if can_toggle {
-                        let label = match (&server.scope, server.state) {
-                            (McpScope::Project, McpState::PendingApproval) => "Aprobar",
-                            (_, McpState::Enabled) => "Desactivar",
-                            (_, McpState::Disabled | McpState::PendingApproval) => "Activar",
-                        };
-                        buttons.push(view.button(
-                            appearance,
-                            format!("{key}:toggle"),
-                            label,
-                            ClaudeCodePageAction::ToggleMcp(index),
-                            ButtonVariant::Secondary,
-                        ));
+                let state = match server.state {
+                    McpState::Enabled => "activo",
+                    McpState::Disabled => "desactivado",
+                    McpState::PendingApproval => "pendiente de aprobación (actívalo para aprobar)",
+                };
+                if can_toggle {
+                    card.toggle = Some((
+                        server.state == McpState::Enabled,
+                        ClaudeCodePageAction::ToggleMcp(index),
+                    ));
+                    if server.state == McpState::PendingApproval {
+                        card.chips.push(state.to_owned());
                     }
-                    buttons.extend(view.delete_buttons(appearance, &key, DeleteTarget::Mcp(index)));
+                } else {
+                    card.chips.push(state.to_owned());
                 }
-                buttons.extend(view.file_buttons(appearance, &key, &server.path, true));
-                rows.push(render_row(
-                    appearance,
-                    &server.name,
-                    &badges,
-                    Some(subtitle),
-                    None,
-                    buttons,
-                ));
+                if writable {
+                    card.delete_target = Some(DeleteTarget::Mcp(index));
+                }
+                cards.push(view.render_card(card, appearance));
             }
         }
-        view.render_section(
+        view.render_list(
             appearance,
-            "Servidores MCP",
-            actions,
             Some(FormSection::Mcp),
-            rows,
+            cards,
+            total,
             "No hay servidores MCP.",
         )
     }
@@ -2066,17 +2633,28 @@ impl SettingsWidget for PluginsWidget {
         &self,
         view: &Self::View,
         appearance: &Appearance,
-        _app: &AppContext,
+        app: &AppContext,
     ) -> Box<dyn Element> {
-        let mut rows = Vec::new();
+        let query = view.search_query(app);
+        let mut cards = Vec::new();
+        let mut total = 0;
         if let Some(snapshot) = &view.snapshot {
+            total = snapshot.plugins.len() + snapshot.marketplaces.len();
             for (index, plugin) in snapshot.plugins.iter().enumerate() {
-                let key = format!("plugin:{index}");
-                let mut badges = Vec::new();
-                if let Some(version) = &plugin.version {
-                    badges.push(format!("v{version}"));
+                let install_scope = plugin
+                    .install_scope
+                    .as_ref()
+                    .map(|scope| format!("Instalado con scope {scope}"));
+                if !matches_query(&query, &plugin.id, install_scope.as_deref()) {
+                    continue;
                 }
-                badges.push(
+                let mut card = Card::new(format!("plugin:{index}"), plugin.id.clone());
+                card.menu = Some(CardRef::Plugin(index));
+                card.chips.push("Plugin".to_owned());
+                if let Some(version) = &plugin.version {
+                    card.chips.push(format!("v{version}"));
+                }
+                card.chips.push(
                     if plugin.installed {
                         "instalado"
                     } else {
@@ -2084,63 +2662,42 @@ impl SettingsWidget for PluginsWidget {
                     }
                     .to_owned(),
                 );
-                badges.push(match (plugin.enabled, plugin.enabled_source) {
-                    (Some(true), Some(source)) => format!("activado ({})", source.label()),
-                    (Some(false), Some(source)) => format!("desactivado ({})", source.label()),
-                    (Some(_), None) | (None, Some(_)) | (None, None) => "no activado".to_owned(),
-                });
+                card.chips
+                    .push(match (plugin.enabled, plugin.enabled_source) {
+                        (Some(true), Some(source)) => format!("activado ({})", source.label()),
+                        (Some(false), Some(source)) => {
+                            format!("desactivado ({})", source.label())
+                        }
+                        (Some(_), None) | (None, Some(_)) | (None, None) => {
+                            "no activado".to_owned()
+                        }
+                    });
+                card.description = install_scope;
                 let target = plugin_toggle_scope(&snapshot.paths, &plugin.mentioned_in);
-                let mut buttons = vec![view.button(
-                    appearance,
-                    format!("{key}:toggle"),
-                    &if plugin.enabled == Some(true) {
-                        format!("Desactivar (en {})", target.label())
-                    } else {
-                        format!("Activar (en {})", target.label())
-                    },
+                card.detail = Some(format!("El interruptor escribe en: {}", target.label()));
+                card.toggle = Some((
+                    plugin.enabled == Some(true),
                     ClaudeCodePageAction::TogglePlugin(index),
-                    ButtonVariant::Secondary,
-                )];
-                if let Some(path) = &plugin.install_path {
-                    buttons.extend(view.file_buttons(appearance, &key, path, false));
-                }
-                rows.push(render_row(
-                    appearance,
-                    &plugin.id,
-                    &badges,
-                    plugin
-                        .install_scope
-                        .as_ref()
-                        .map(|scope| format!("Instalado con scope {scope}")),
-                    None,
-                    buttons,
                 ));
+                cards.push(view.render_card(card, appearance));
             }
+            let mut marketplace_cards = Vec::new();
             for (index, marketplace) in snapshot.marketplaces.iter().enumerate() {
-                let key = format!("marketplace:{index}");
-                let buttons = marketplace
-                    .install_location
-                    .as_ref()
-                    .map(|path| view.file_buttons(appearance, &key, path, false))
-                    .unwrap_or_default();
-                rows.push(render_row(
-                    appearance,
-                    &marketplace.name,
-                    &["marketplace".to_owned()],
-                    Some(marketplace.source.clone()),
-                    None,
-                    buttons,
-                ));
+                if !matches_query(&query, &marketplace.name, Some(&marketplace.source)) {
+                    continue;
+                }
+                let mut card = Card::new(format!("marketplace:{index}"), marketplace.name.clone());
+                card.menu = Some(CardRef::Marketplace(index));
+                card.chips.push("Marketplace".to_owned());
+                card.description = Some(marketplace.source.clone());
+                marketplace_cards.push(view.render_card(card, appearance));
+            }
+            if !marketplace_cards.is_empty() {
+                cards.push(render_sub_header(appearance, "Marketplaces", None));
+                cards.extend(marketplace_cards);
             }
         }
-        view.render_section(
-            appearance,
-            "Plugins y marketplaces",
-            Vec::new(),
-            None,
-            rows,
-            "No hay plugins instalados.",
-        )
+        view.render_list(appearance, None, cards, total, "No hay plugins instalados.")
     }
 }
 
@@ -2157,70 +2714,39 @@ impl SettingsWidget for HooksWidget {
         &self,
         view: &Self::View,
         appearance: &Appearance,
-        _app: &AppContext,
+        app: &AppContext,
     ) -> Box<dyn Element> {
-        let mut actions = Vec::new();
-        let mut rows = Vec::new();
+        let query = view.search_query(app);
+        let mut cards = Vec::new();
+        let mut total = 0;
         if let Some(snapshot) = &view.snapshot {
-            for scope in [
-                SettingsScope::User,
-                SettingsScope::Project,
-                SettingsScope::Local,
-            ] {
-                if snapshot.paths.settings_path(scope).is_some() {
-                    actions.push(view.button(
-                        appearance,
-                        format!("hook:new:{scope:?}"),
-                        &format!("Nuevo hook ({})", scope.label()),
-                        ClaudeCodePageAction::NewHook(scope),
-                        ButtonVariant::Secondary,
-                    ));
-                }
-            }
+            total = snapshot.hooks.len();
             for (index, hook) in snapshot.hooks.iter().enumerate() {
-                let key = format!("hook:{index}");
-                let mut badges = vec![hook.source.label(), hook.hook_type.clone()];
-                if let Some(timeout) = hook.timeout {
-                    badges.push(format!("{timeout}s"));
-                }
                 let title = match &hook.matcher {
                     Some(matcher) if !matcher.is_empty() => format!("{} · {matcher}", hook.event),
                     _ => hook.event.clone(),
                 };
-                let editable = matches!(hook.source, HookSource::Settings(scope) if scope.is_writable())
-                    && hook.hook_type == "command";
-                let mut buttons = Vec::new();
-                if editable {
-                    buttons.push(view.button(
-                        appearance,
-                        format!("{key}:edit"),
-                        "Editar",
-                        ClaudeCodePageAction::EditHook(index),
-                        ButtonVariant::Secondary,
-                    ));
-                    buttons.extend(view.delete_buttons(
-                        appearance,
-                        &key,
-                        DeleteTarget::Hook(index),
-                    ));
+                if !matches_query(&query, &title, hook.command.as_deref()) {
+                    continue;
                 }
-                buttons.extend(view.file_buttons(appearance, &key, &hook.path, true));
-                rows.push(render_row(
-                    appearance,
-                    &title,
-                    &badges,
-                    hook.command.clone(),
-                    None,
-                    buttons,
-                ));
+                let mut card = Card::new(format!("hook:{index}"), title);
+                card.menu = Some(CardRef::Hook(index));
+                card.chips = vec![hook.source.label(), hook.hook_type.clone()];
+                if let Some(timeout) = hook.timeout {
+                    card.chips.push(format!("{timeout}s"));
+                }
+                card.description = hook.command.clone();
+                if hook_is_editable(hook) {
+                    card.delete_target = Some(DeleteTarget::Hook(index));
+                }
+                cards.push(view.render_card(card, appearance));
             }
         }
-        view.render_section(
+        view.render_list(
             appearance,
-            "Hooks",
-            actions,
             Some(FormSection::Hooks),
-            rows,
+            cards,
+            total,
             "No hay hooks.",
         )
     }
@@ -2240,50 +2766,44 @@ impl SettingsWidget for SettingsFilesWidget {
         &self,
         view: &Self::View,
         appearance: &Appearance,
-        _app: &AppContext,
+        app: &AppContext,
     ) -> Box<dyn Element> {
-        let mut rows = Vec::new();
+        let query = view.search_query(app);
+        let mut cards = Vec::new();
+        let mut total = 0;
         if let Some(snapshot) = &view.snapshot {
+            let home = snapshot.home_dir.as_deref();
+            total = snapshot.settings.len();
             for file in &snapshot.settings {
-                let key = format!("settings:{:?}", file.scope);
-                let state = if file.error.is_some() {
-                    "inválido"
-                } else if file.exists {
-                    "existe"
-                } else {
-                    "no existe"
-                };
-                let mut buttons = Vec::new();
-                if file.scope.is_writable() && file.error.is_none() {
-                    buttons.push(view.button(
-                        appearance,
-                        format!("{key}:edit"),
-                        "Editar valores comunes",
-                        ClaudeCodePageAction::EditSettings(file.scope),
-                        ButtonVariant::Secondary,
-                    ));
+                let path = display_path(&file.path, home);
+                if !matches_query(&query, file.scope.label(), Some(&path)) {
+                    continue;
                 }
-                buttons.extend(view.file_buttons(appearance, &key, &file.path, file.exists));
-                let mut badges = vec![state.to_owned()];
+                let mut card = Card::new(
+                    format!("settings:{:?}", file.scope),
+                    file.scope.label().to_owned(),
+                );
+                card.menu = Some(CardRef::SettingsFile(file.scope));
+                card.chips.push(
+                    if file.error.is_some() {
+                        "inválido"
+                    } else if file.exists {
+                        "existe"
+                    } else {
+                        "no existe"
+                    }
+                    .to_owned(),
+                );
                 if !file.scope.is_writable() {
-                    badges.push("solo lectura".to_owned());
+                    card.chips.push("solo lectura".to_owned());
                 }
-                rows.push(render_row(
-                    appearance,
-                    &format!(
-                        "{} — {}",
-                        file.scope.label(),
-                        display_path(&file.path, snapshot.home_dir.as_deref())
-                    ),
-                    &badges,
-                    None,
-                    file.error.as_deref(),
-                    buttons,
-                ));
+                card.detail = Some(path);
+                card.error = file.error.clone();
+                cards.push(view.render_card(card, appearance));
             }
             if !snapshot.attributions.is_empty() {
-                let mut lines =
-                    vec!["Valores efectivos (archivo que gana entre paréntesis):".to_owned()];
+                total += 1;
+                let mut lines = Vec::new();
                 for attribution in &snapshot.attributions {
                     let effective = attribution
                         .entries
@@ -2308,40 +2828,53 @@ impl SettingsWidget for SettingsFilesWidget {
                     }
                     lines.push(line);
                 }
-                rows.push(render_row(
-                    appearance,
-                    "Atribución",
-                    &[],
-                    Some(lines.join("\n")),
-                    None,
-                    Vec::new(),
-                ));
+                let lines = lines.join("\n");
+                if matches_query(&query, "Valores efectivos", Some(&lines)) {
+                    let mut card = Card::new(
+                        "settings:attribution".to_owned(),
+                        "Valores efectivos".to_owned(),
+                    );
+                    card.chips
+                        .push("archivo que gana entre paréntesis".to_owned());
+                    card.description = Some(lines);
+                    card.full_text = true;
+                    cards.push(view.render_card(card, appearance));
+                }
             }
             if !snapshot.permission_rules.is_empty() {
+                total += 1;
                 let lines = snapshot
                     .permission_rules
                     .iter()
                     .map(|rule| format!("{}: {} ({})", rule.kind, rule.rule, rule.scope.label()))
                     .collect::<Vec<_>>()
                     .join("\n");
-                rows.push(render_row(
-                    appearance,
-                    "Reglas de permisos (se combinan entre archivos)",
-                    &[],
-                    Some(lines),
-                    None,
-                    Vec::new(),
-                ));
+                if matches_query(&query, "Reglas de permisos", Some(&lines)) {
+                    let mut card = Card::new(
+                        "settings:permissions".to_owned(),
+                        "Reglas de permisos".to_owned(),
+                    );
+                    card.chips.push("se combinan entre archivos".to_owned());
+                    card.description = Some(lines);
+                    card.full_text = true;
+                    cards.push(view.render_card(card, appearance));
+                }
             }
         }
-        view.render_section(
-            appearance,
-            "Archivos de configuración",
-            Vec::new(),
-            Some(FormSection::Settings),
-            rows,
-            "No hay archivos de configuración.",
-        )
+        Flex::column()
+            .with_child(render_sub_header(
+                appearance,
+                "Archivos de configuración",
+                None,
+            ))
+            .with_child(view.render_list(
+                appearance,
+                Some(FormSection::Settings),
+                cards,
+                total,
+                "No hay archivos de configuración.",
+            ))
+            .finish()
     }
 }
 
@@ -2358,33 +2891,35 @@ impl SettingsWidget for MemoryWidget {
         &self,
         view: &Self::View,
         appearance: &Appearance,
-        _app: &AppContext,
+        app: &AppContext,
     ) -> Box<dyn Element> {
-        let mut rows = Vec::new();
+        let query = view.search_query(app);
+        let mut cards = Vec::new();
+        let mut total = 0;
         if let Some(snapshot) = &view.snapshot {
+            total = snapshot.memory_files.len();
             for (index, file) in snapshot.memory_files.iter().enumerate() {
-                let key = format!("memory:{index}");
-                rows.push(render_row(
-                    appearance,
-                    &format!(
-                        "{} — {}",
-                        file.label,
-                        display_path(&file.path, snapshot.home_dir.as_deref())
-                    ),
-                    &[if file.exists { "existe" } else { "no existe" }.to_owned()],
-                    None,
-                    None,
-                    view.file_buttons(appearance, &key, &file.path, file.exists),
-                ));
+                let path = display_path(&file.path, snapshot.home_dir.as_deref());
+                if !matches_query(&query, &file.label, Some(&path)) {
+                    continue;
+                }
+                let mut card = Card::new(format!("memory:{index}"), file.label.clone());
+                card.menu = Some(CardRef::Memory(index));
+                card.chips
+                    .push(if file.exists { "existe" } else { "no existe" }.to_owned());
+                card.detail = Some(path);
+                cards.push(view.render_card(card, appearance));
             }
         }
-        view.render_section(
-            appearance,
-            "Archivos de memoria",
-            Vec::new(),
-            None,
-            rows,
-            "No hay archivos de memoria.",
-        )
+        Flex::column()
+            .with_child(render_sub_header(appearance, "Archivos de memoria", None))
+            .with_child(view.render_list(
+                appearance,
+                None,
+                cards,
+                total,
+                "No hay archivos de memoria.",
+            ))
+            .finish()
     }
 }

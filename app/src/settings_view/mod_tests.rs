@@ -145,6 +145,12 @@ const ALL_SECTIONS: &[SettingsSection] = &[
     SettingsSection::Knowledge,
     SettingsSection::ThirdPartyCLIAgents,
     SettingsSection::ClaudeCode,
+    SettingsSection::ClaudeCodeSkills,
+    SettingsSection::ClaudeCodePlugins,
+    SettingsSection::ClaudeCodeAgents,
+    SettingsSection::ClaudeCodeCommands,
+    SettingsSection::ClaudeCodeHooks,
+    SettingsSection::ClaudeCodeSettings,
     SettingsSection::CodeIndexing,
     SettingsSection::EditorAndCodeReview,
     SettingsSection::CloudEnvironments,
@@ -180,6 +186,12 @@ fn all_sections_list_is_exhaustive() {
             | SettingsSection::Knowledge
             | SettingsSection::ThirdPartyCLIAgents
             | SettingsSection::ClaudeCode
+            | SettingsSection::ClaudeCodeSkills
+            | SettingsSection::ClaudeCodePlugins
+            | SettingsSection::ClaudeCodeAgents
+            | SettingsSection::ClaudeCodeCommands
+            | SettingsSection::ClaudeCodeHooks
+            | SettingsSection::ClaudeCodeSettings
             | SettingsSection::CodeIndexing
             | SettingsSection::EditorAndCodeReview
             | SettingsSection::CloudEnvironments
