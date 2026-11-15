@@ -74,7 +74,7 @@ impl PuenteStatus {
     /// `puente: sin conexion`.
     pub fn label(&self) -> String {
         match self {
-            PuenteStatus::Unavailable => "puente: sin conexion".to_string(),
+            PuenteStatus::Unavailable => "puente: sin conexión".to_string(),
             PuenteStatus::Ok(equipos) if equipos.is_empty() => "puente: sin equipos".to_string(),
             PuenteStatus::Ok(equipos) => {
                 let n = equipos.len();
