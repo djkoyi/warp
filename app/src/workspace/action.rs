@@ -859,7 +859,7 @@ pub enum WorkspaceAction {
     ListClaudeWorktrees,
     /// Remove the clean Claude worktrees of the active tab's repository that no tab is using.
     CleanupClaudeWorktrees,
-    /// Reload every local Claude Code session in every window (`/exit`, then `--resume` in the
+    /// Reload every local Claude Code session in every window (Ctrl-C exit, then `--resume` in the
     /// same pane) so it picks up newly added MCP servers, skills and plugins. Busy sessions reload
     /// once they go idle.
     ReloadClaudeInAllTabs,

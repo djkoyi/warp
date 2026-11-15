@@ -22,7 +22,7 @@ const RATE_LIMIT_WARNING_PCT: f32 = 80.;
 const RATE_LIMIT_DANGER_PCT: f32 = 95.;
 
 const SEPARATOR: &str = "  ·  ";
-const RELOAD_PENDING_LABEL: &str = "pendiente de recarga";
+const RELOAD_PENDING_LABEL: &str = "recarga pendiente";
 
 /// Semantic color of a meter segment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

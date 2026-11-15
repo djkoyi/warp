@@ -1,5 +1,6 @@
-//! Reloading live Claude Code sessions in place (`/exit` + `claude --resume`), so a newly added
-//! MCP server, skill or plugin is picked up without losing the conversation or the pane.
+//! Reloading live Claude Code sessions in place (exit with Ctrl-C, then `claude --resume`), so a
+//! newly added MCP server, skill or plugin is picked up without losing the conversation or the
+//! pane.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -8,24 +9,89 @@ use super::CLIAgent;
 use super::claude_code_resume::ClaudeCodeResume;
 use super::cli_agent_sessions::{BlockedSource, CLIAgentSession, CLIAgentSessionStatus};
 
-/// Interrupts a turn, dismisses a prompt, or clears a draft so `/exit` lands on an empty input.
+/// The only key the reload ever types. Printable text is never written: if the session is not
+/// where we think it is, text could land in a prompt, a permission dialog or a shell.
 pub const CTRL_C: &[u8] = &[0x03];
-pub const EXIT_COMMAND: &[u8] = b"/exit";
-/// Sent separately from [`EXIT_COMMAND`]: Claude Code treats a burst of input as a paste, in
-/// which a carriage return is a newline rather than a submit.
-pub const SUBMIT: &[u8] = b"\r";
 
 /// Time for an interrupted turn or dismissed prompt to settle before the input is cleared.
 pub const FORCE_INTERRUPT_SETTLE: Duration = Duration::from_millis(1000);
 /// Gap between the keystrokes of the exit sequence.
 pub const KEYSTROKE_GAP: Duration = Duration::from_millis(250);
-/// How long Claude Code gets to exit after `/exit` before the Ctrl-C fallback.
+/// How long Claude Code gets to exit after the last Ctrl-C before the reload is abandoned.
 pub const EXIT_TIMEOUT: Duration = Duration::from_secs(4);
-/// Three presses: the first clears any text left in the input, the next two are Claude Code's
-/// "press Ctrl-C again to exit".
-pub const FALLBACK_CTRL_C_PRESSES: usize = 3;
-/// How long the Ctrl-C fallback gets before the reload is abandoned.
-pub const FALLBACK_TIMEOUT: Duration = Duration::from_secs(4);
+
+/// One step of the exit sequence. Every step types a single Ctrl-C.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExitStep {
+    /// Forced reloads only: interrupts a turn or dismisses a prompt.
+    Interrupt,
+    /// Clears any draft left in the input.
+    ClearInput,
+    /// Claude Code's "press Ctrl-C again to exit".
+    Arm,
+    Exit,
+    /// Claude Code did not exit in time.
+    GiveUp,
+}
+
+impl ExitStep {
+    pub fn first(activity: Option<ClaudeCodeActivity>) -> Self {
+        match activity {
+            Some(ClaudeCodeActivity::Idle) => ExitStep::ClearInput,
+            Some(
+                ClaudeCodeActivity::Working
+                | ClaudeCodeActivity::AwaitingUser
+                | ClaudeCodeActivity::Unknown,
+            )
+            | None => ExitStep::Interrupt,
+        }
+    }
+
+    /// The bytes this step types, the step that follows and the delay before it. `None` for
+    /// [`ExitStep::GiveUp`], which types nothing.
+    pub fn plan(self) -> Option<(&'static [u8], ExitStep, Duration)> {
+        match self {
+            ExitStep::Interrupt => Some((CTRL_C, ExitStep::ClearInput, FORCE_INTERRUPT_SETTLE)),
+            ExitStep::ClearInput => Some((CTRL_C, ExitStep::Arm, KEYSTROKE_GAP)),
+            ExitStep::Arm => Some((CTRL_C, ExitStep::Exit, KEYSTROKE_GAP)),
+            ExitStep::Exit => Some((CTRL_C, ExitStep::GiveUp, EXIT_TIMEOUT)),
+            ExitStep::GiveUp => None,
+        }
+    }
+}
+
+/// What to do right before typing a keystroke of a non-forced reload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExitKeystrokeCheck {
+    Type,
+    /// The session got busy again; wait for it to go idle.
+    Defer,
+    /// The session is gone; stop.
+    Abandon,
+}
+
+/// A non-forced reload only types while the session is idle, re-checked before every keystroke
+/// because the user may have started a turn in between.
+pub fn check_exit_keystroke(
+    force: bool,
+    activity: Option<ClaudeCodeActivity>,
+) -> ExitKeystrokeCheck {
+    match activity {
+        _ if force => ExitKeystrokeCheck::Type,
+        Some(ClaudeCodeActivity::Idle) => ExitKeystrokeCheck::Type,
+        Some(
+            ClaudeCodeActivity::Working
+            | ClaudeCodeActivity::AwaitingUser
+            | ClaudeCodeActivity::Unknown,
+        ) => ExitKeystrokeCheck::Defer,
+        None => ExitKeystrokeCheck::Abandon,
+    }
+}
+
+/// Error toast for a pane whose session could not be made to exit.
+pub fn reload_failed_message(pane_label: &str) -> String {
+    format!("Claude no salió en {pane_label}; sesión sin recargar")
+}
 
 /// What a Claude Code session is doing, as far as reloading it is concerned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -35,14 +101,20 @@ pub enum ClaudeCodeActivity {
     Working,
     /// Showing a permission prompt or a question; typed keys would answer it.
     AwaitingUser,
+    /// The session reports no fine-grained status (no rich plugin notifications), so whether it
+    /// is idle cannot be told.
+    Unknown,
 }
 
 pub fn claude_code_activity(
     session: &CLIAgentSession,
     has_seen_prompt_submit: bool,
 ) -> ClaudeCodeActivity {
+    if !session.supports_rich_status() {
+        return ClaudeCodeActivity::Unknown;
+    }
     match &session.status {
-        // Sessions start out `InProgress` before any turn has run.
+        // Rich-status sessions start out `InProgress` before any turn has run.
         CLIAgentSessionStatus::InProgress if !has_seen_prompt_submit => ClaudeCodeActivity::Idle,
         CLIAgentSessionStatus::InProgress => ClaudeCodeActivity::Working,
         CLIAgentSessionStatus::Success
@@ -86,6 +158,8 @@ pub enum ClaudeCodeReloadSkipReason {
     NotVerified,
     NoSessionId,
     TranscriptMissing,
+    /// No rich status, so the session may be mid-turn; only a forced reload interrupts it.
+    UnknownStatus,
 }
 
 impl ClaudeCodeReloadSkipReason {
@@ -96,6 +170,7 @@ impl ClaudeCodeReloadSkipReason {
             ClaudeCodeReloadSkipReason::NotVerified => "Claude no verificado",
             ClaudeCodeReloadSkipReason::NoSessionId => "sin session_id",
             ClaudeCodeReloadSkipReason::TranscriptMissing => "sin transcript",
+            ClaudeCodeReloadSkipReason::UnknownStatus => "estado desconocido",
         }
     }
 }
@@ -145,11 +220,18 @@ pub fn decide_claude_code_reload(
     }
     match claude_code_activity(session, pane.has_seen_prompt_submit) {
         ClaudeCodeActivity::Idle => ClaudeCodeReloadDecision::ReloadNow(resume),
-        ClaudeCodeActivity::Working | ClaudeCodeActivity::AwaitingUser if force => {
+        ClaudeCodeActivity::Working
+        | ClaudeCodeActivity::AwaitingUser
+        | ClaudeCodeActivity::Unknown
+            if force =>
+        {
             ClaudeCodeReloadDecision::ReloadNow(resume)
         }
         ClaudeCodeActivity::Working | ClaudeCodeActivity::AwaitingUser => {
             ClaudeCodeReloadDecision::ReloadWhenIdle(resume)
+        }
+        ClaudeCodeActivity::Unknown => {
+            ClaudeCodeReloadDecision::Skip(ClaudeCodeReloadSkipReason::UnknownStatus)
         }
     }
 }
@@ -189,7 +271,7 @@ impl ClaudeCodeReloadSummary {
             return "No hay sesiones de Claude Code en ejecución.".to_owned();
         }
         let mut message = format!(
-            "Recargadas {} · pendientes {} · omitidas {}",
+            "Recargando {} · pendientes {} · omitidas {}",
             self.reloaded,
             self.pending,
             self.skipped_count()

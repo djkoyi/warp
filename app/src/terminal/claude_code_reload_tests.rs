@@ -1,7 +1,10 @@
+use std::time::Duration;
+
 use super::{
-    ClaudeCodeActivity, ClaudeCodeReloadDecision, ClaudeCodeReloadPane, ClaudeCodeReloadProgress,
-    ClaudeCodeReloadSkipReason, ClaudeCodeReloadSummary, claude_code_activity,
-    decide_claude_code_reload,
+    CTRL_C, ClaudeCodeActivity, ClaudeCodeReloadDecision, ClaudeCodeReloadPane,
+    ClaudeCodeReloadProgress, ClaudeCodeReloadSkipReason, ClaudeCodeReloadSummary, EXIT_TIMEOUT,
+    ExitKeystrokeCheck, ExitStep, FORCE_INTERRUPT_SETTLE, KEYSTROKE_GAP, check_exit_keystroke,
+    claude_code_activity, decide_claude_code_reload, reload_failed_message,
 };
 use crate::terminal::CLIAgent;
 use crate::terminal::claude_code_resume::ClaudeCodeResume;
@@ -277,6 +280,114 @@ fn summary_message_counts_and_groups_skip_reasons() {
     assert_eq!(summary.skipped_count(), 3);
     assert_eq!(
         summary.message(),
-        "Recargadas 2 · pendientes 1 · omitidas 3 (2 SSH/subshell, 1 sin session_id)"
+        "Recargando 2 · pendientes 1 · omitidas 3 (2 SSH/subshell, 1 sin session_id)"
+    );
+}
+
+/// Status-line-only sessions stay `InProgress` forever, so "no prompt submitted yet" says
+/// nothing about whether they are idle.
+#[test]
+fn session_without_rich_status_is_unknown() {
+    let mut status_line_only = session(CLIAgentSessionStatus::InProgress);
+    status_line_only.received_rich_notification = false;
+    for has_seen_prompt_submit in [false, true] {
+        assert_eq!(
+            claude_code_activity(&status_line_only, has_seen_prompt_submit),
+            ClaudeCodeActivity::Unknown
+        );
+    }
+
+    let mut pane = pane(Some(&status_line_only));
+    pane.has_seen_prompt_submit = false;
+    assert_eq!(
+        decide(&pane, false),
+        ClaudeCodeReloadDecision::Skip(ClaudeCodeReloadSkipReason::UnknownStatus)
+    );
+    assert_eq!(
+        decide(&pane, true),
+        ClaudeCodeReloadDecision::ReloadNow(expected_resume())
+    );
+    assert_eq!(
+        ExitStep::first(Some(ClaudeCodeActivity::Unknown)),
+        ExitStep::Interrupt
+    );
+    assert_eq!(
+        ClaudeCodeReloadSkipReason::UnknownStatus.label(),
+        "estado desconocido"
+    );
+}
+
+fn exit_sequence(first: ExitStep) -> Vec<(ExitStep, &'static [u8], Duration)> {
+    let mut sequence = Vec::new();
+    let mut step = first;
+    while let Some((bytes, next, delay)) = step.plan() {
+        sequence.push((step, bytes, delay));
+        step = next;
+    }
+    assert_eq!(step, ExitStep::GiveUp);
+    sequence
+}
+
+/// Text typed into a session that is not at its prompt could answer a permission dialog or
+/// reach the shell, so the exit sequence is Ctrl-C only.
+#[test]
+fn exit_sequence_types_only_ctrl_c() {
+    assert_eq!(
+        exit_sequence(ExitStep::first(Some(ClaudeCodeActivity::Idle))),
+        vec![
+            (ExitStep::ClearInput, CTRL_C, KEYSTROKE_GAP),
+            (ExitStep::Arm, CTRL_C, KEYSTROKE_GAP),
+            (ExitStep::Exit, CTRL_C, EXIT_TIMEOUT),
+        ]
+    );
+    for activity in [
+        Some(ClaudeCodeActivity::Working),
+        Some(ClaudeCodeActivity::AwaitingUser),
+        None,
+    ] {
+        assert_eq!(
+            exit_sequence(ExitStep::first(activity)),
+            vec![
+                (ExitStep::Interrupt, CTRL_C, FORCE_INTERRUPT_SETTLE),
+                (ExitStep::ClearInput, CTRL_C, KEYSTROKE_GAP),
+                (ExitStep::Arm, CTRL_C, KEYSTROKE_GAP),
+                (ExitStep::Exit, CTRL_C, EXIT_TIMEOUT),
+            ]
+        );
+    }
+    assert_eq!(ExitStep::GiveUp.plan(), None);
+}
+
+#[test]
+fn non_forced_exit_keystrokes_wait_for_idle() {
+    assert_eq!(
+        check_exit_keystroke(false, Some(ClaudeCodeActivity::Idle)),
+        ExitKeystrokeCheck::Type
+    );
+    for activity in [
+        ClaudeCodeActivity::Working,
+        ClaudeCodeActivity::AwaitingUser,
+        ClaudeCodeActivity::Unknown,
+    ] {
+        assert_eq!(
+            check_exit_keystroke(false, Some(activity)),
+            ExitKeystrokeCheck::Defer
+        );
+        assert_eq!(
+            check_exit_keystroke(true, Some(activity)),
+            ExitKeystrokeCheck::Type
+        );
+    }
+    assert_eq!(
+        check_exit_keystroke(false, None),
+        ExitKeystrokeCheck::Abandon
+    );
+}
+
+#[test]
+fn reload_failure_names_the_pane() {
+    assert_eq!(
+        reload_failed_message("api-server"),
+        "Claude no salió en api-server; sesión sin recargar"
     );
 }

@@ -12808,7 +12808,10 @@ impl TerminalView {
                             self.pending_claude_code_resume = None;
                         }
                     }
-                    self.on_user_block_completed_for_claude_code_reload(ctx);
+                    self.on_user_block_completed_for_claude_code_reload(
+                        &block_completed_event.block_id,
+                        ctx,
+                    );
                     self.save_claude_code_resume_if_changed(ctx);
                 }
 
@@ -17071,6 +17074,7 @@ impl TerminalView {
                     .as_ref()
                     .map(|pending| pending.resume().clone())
             })
+            .or_else(|| self.claude_code_reload_resume_to_persist().cloned())
     }
 
     fn start_pending_claude_code_resume(&mut self, session: &Session, ctx: &mut ViewContext<Self>) {
@@ -29963,6 +29967,7 @@ impl View for TerminalView {
             self.maybe_report_focus_out(ctx);
             ctx.notify();
         }
+        self.on_blur_for_claude_code_reload(ctx);
     }
 
     fn keymap_context(&self, app: &AppContext) -> warpui::keymap::Context {

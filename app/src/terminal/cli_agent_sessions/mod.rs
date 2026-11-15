@@ -424,7 +424,7 @@ pub struct CLIAgentSessionsModel {
     /// Source of `CtrlCCancelState::armed_token` values. Monotonically increasing;
     /// never reused, so a stale callback can never alias a newer window.
     next_ctrl_c_token: u64,
-    /// Terminals whose session will reload (`/exit` + `--resume`) once it goes idle.
+    /// Terminals whose session will reload (exit + `--resume`) once it goes idle.
     reload_pending: HashSet<EntityId>,
 }
 
