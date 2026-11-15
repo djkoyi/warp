@@ -3894,6 +3894,7 @@ impl Workspace {
             }
             TabSettingsChangedEvent::AutoTabNames { .. }
             | TabSettingsChangedEvent::ClaudeCommand { .. }
+            | TabSettingsChangedEvent::ClaudeOpenOnNewWindow { .. }
             | TabSettingsChangedEvent::ClaudeWorkspaces { .. } => {
                 self.update_window_title(ctx);
                 ctx.notify();
