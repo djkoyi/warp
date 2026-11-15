@@ -12,6 +12,25 @@ fn env_value(command: &Command, key: &str) -> Option<Option<String>> {
 }
 
 #[test]
+fn host_shell_command_drops_inherited_claude_code_session_env() {
+    let command = build_host_shell_command(
+        shell_starter(ShellType::Zsh, "/bin/zsh"),
+        None,
+        HashMap::new(),
+        None,
+        false,
+        false,
+        false,
+        false,
+        true,
+    );
+
+    for name in ["CLAUDECODE", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_SESSION_ID"] {
+        assert_eq!(env_value(&command, name), Some(None), "{name} must be removed");
+    }
+}
+
+#[test]
 fn host_bash_command_sets_history_size_sentinels() {
     let command = build_host_shell_command(
         shell_starter(ShellType::Bash, "/bin/bash"),
