@@ -105,6 +105,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     SharedSessionSettings::register(ctx);
     WarpDriveSettings::register(ctx);
     WorkflowAliases::register(ctx);
+    crate::claude_tasks::ClaudeTasksSettings::register(ctx);
     EmacsBindingsSettings::register(ctx);
     SameLinePromptBlockSettings::register(ctx);
     SemanticSelection::register(ctx);
