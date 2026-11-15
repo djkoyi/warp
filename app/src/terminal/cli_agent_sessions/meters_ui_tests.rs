@@ -142,7 +142,10 @@ fn global_chip_segments_skip_missing_window() {
         }),
         ..Default::default()
     };
-    assert_eq!(texts(&global_chip_segments(&only_five_hour)), vec!["5h 10%"]);
+    assert_eq!(
+        texts(&global_chip_segments(&only_five_hour)),
+        vec!["5h 10%"]
+    );
 
     let only_seven_day = GlobalMeters {
         seven_day: Some(RateLimitWindow {
@@ -151,7 +154,10 @@ fn global_chip_segments_skip_missing_window() {
         }),
         ..Default::default()
     };
-    assert_eq!(texts(&global_chip_segments(&only_seven_day)), vec!["7d 88%"]);
+    assert_eq!(
+        texts(&global_chip_segments(&only_seven_day)),
+        vec!["7d 88%"]
+    );
 }
 
 #[test]
