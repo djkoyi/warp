@@ -39,6 +39,7 @@ use crate::features::FeatureFlag;
 use crate::themes::theme::PromptColors;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
+use crate::util::git::PrChecksSummary;
 
 /// The value of a context chip. Most chips produce plain text, but some
 /// (like `GitDiffStats`) carry structured data to avoid string round-trips.
@@ -103,8 +104,26 @@ impl From<String> for ChipValue {
     }
 }
 
+/// Builds the `GithubPullRequest` chip value: the PR URL, optionally followed by a space and the
+/// CI checks badge. URLs never contain spaces, so the first space separates the two parts.
+pub(crate) fn github_pr_chip_value(url: &str, checks: Option<&PrChecksSummary>) -> String {
+    match checks {
+        Some(checks) => format!("{} {}", url.trim(), checks.badge()),
+        None => url.trim().to_string(),
+    }
+}
+
+/// Splits a `GithubPullRequest` chip value into the PR URL and the optional CI checks badge.
+pub(crate) fn split_github_pr_chip_value(value: &str) -> (&str, Option<&str>) {
+    match value.trim().split_once(' ') {
+        Some((url, badge)) => (url, Some(badge.trim()).filter(|badge| !badge.is_empty())),
+        None => (value.trim(), None),
+    }
+}
+
 pub(crate) fn github_pr_number_from_url(url: &str) -> Option<i32> {
-    let (_, tail) = url.trim().rsplit_once("/pull/")?;
+    let (url, _) = split_github_pr_chip_value(url);
+    let (_, tail) = url.rsplit_once("/pull/")?;
     let number = tail.split(['/', '?', '#']).next()?;
     parse_github_pr_number(number)
 }
@@ -116,8 +135,13 @@ fn parse_github_pr_number(number: &str) -> Option<i32> {
     number.parse::<i32>().ok().filter(|number| *number > 0)
 }
 
+/// Display text for a `GithubPullRequest` chip value, e.g. `PR #12` or `PR #12 · CI ✓`.
 pub(crate) fn github_pr_display_text_from_url(url: &str) -> Option<String> {
-    github_pr_number_from_url(url).map(|number| format!("PR #{number}"))
+    let (_, badge) = split_github_pr_chip_value(url);
+    github_pr_number_from_url(url).map(|number| match badge {
+        Some(badge) => format!("PR #{number} · {badge}"),
+        None => format!("PR #{number}"),
+    })
 }
 
 /// The refresh settings for the date context chip.

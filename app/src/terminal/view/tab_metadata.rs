@@ -1,7 +1,9 @@
 use warpui::AppContext;
 
 use crate::context_chips::display_chip::GitLineChanges;
-use crate::context_chips::{ContextChipKind, git_line_changes_from_chips};
+use crate::context_chips::{
+    ContextChipKind, git_line_changes_from_chips, split_github_pr_chip_value,
+};
 use crate::terminal::TerminalView;
 
 impl TerminalView {
@@ -75,7 +77,7 @@ impl TerminalView {
         self.current_prompt
             .as_ref(ctx)
             .latest_chip_value(&ContextChipKind::GithubPullRequest, ctx)
-            .map(|v| v.to_string())
+            .map(|v| split_github_pr_chip_value(&v.to_string()).0.to_string())
             .filter(|value| !value.trim().is_empty())
     }
 

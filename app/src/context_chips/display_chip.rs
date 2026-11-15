@@ -29,7 +29,7 @@ use super::display_menu::{
 };
 use super::{
     ChipResult, ChipValue, ContextChipKind, agent_view_chip_color, github_pr_display_text_from_url,
-    render_text_from_kind,
+    render_text_from_kind, split_github_pr_chip_value,
 };
 use crate::ai::blocklist::agent_view::AgentViewController;
 use crate::ai::blocklist::prompt::plan_and_todo_list::{PlanAndTodoListEvent, PlanAndTodoListView};
@@ -55,6 +55,7 @@ use crate::terminal::view::ambient_agent::AmbientAgentViewModel;
 use crate::ui_components::blended_colors;
 use crate::ui_components::icons::Icon;
 use crate::util::bindings::keybinding_name_to_display_string;
+use crate::util::git::PrChecksStatus;
 use crate::util::truncation::truncate_from_beginning;
 use crate::view_components::action_button::{ActionButtonTheme, NakedTheme};
 use crate::view_components::{FeaturePopup, NewFeaturePopupEvent, NewFeaturePopupLabel};
@@ -1447,14 +1448,25 @@ impl DisplayChip {
 
     fn github_pull_request_chip(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);
-        let font_color = if self.is_in_agent_view {
-            agent_view_chip_color(appearance)
-        } else {
-            appearance.theme().ansi_fg_green()
+        let (pr_url, checks_badge) = split_github_pr_chip_value(&self.text);
+        let checks_status = checks_badge.and_then(PrChecksStatus::from_badge);
+        let font_color = match checks_status {
+            Some(PrChecksStatus::Failing) => appearance.theme().ansi_fg_red(),
+            Some(PrChecksStatus::Pending) => appearance.theme().ansi_fg_yellow(),
+            Some(PrChecksStatus::Passing) | None if self.is_in_agent_view => {
+                agent_view_chip_color(appearance)
+            }
+            Some(PrChecksStatus::Passing) | None => appearance.theme().ansi_fg_green(),
         };
         let chip_text =
             github_pr_display_text_from_url(&self.text).unwrap_or_else(|| self.text.clone());
-        let url = self.text.clone();
+        let tooltip_text = match checks_status {
+            Some(PrChecksStatus::Failing) => "View pull request (CI checks failing)",
+            Some(PrChecksStatus::Pending) => "View pull request (CI checks running)",
+            Some(PrChecksStatus::Passing) => "View pull request (CI checks passed)",
+            None => "View pull request",
+        };
+        let url = pr_url.to_string();
         let is_in_agent_view = self.is_in_agent_view;
 
         let hover = Hoverable::new(self.mouse_state.clone(), move |state| {
@@ -1470,7 +1482,7 @@ impl DisplayChip {
             if state.is_hovered() {
                 let tool_tip = appearance
                     .ui_builder()
-                    .tool_tip("View pull request".to_string())
+                    .tool_tip(tooltip_text.to_string())
                     .build()
                     .finish();
                 stack.add_positioned_overlay_child(tool_tip, udi_tooltip_positioning());

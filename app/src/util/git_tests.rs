@@ -439,3 +439,63 @@ async fn detached_tag_display_returns_short_sha() {
         "expected {full_sha} to start with {result}"
     );
 }
+
+#[test]
+fn pr_checks_summary_counts_check_runs_and_status_contexts() {
+    let rollup = serde_json::json!([
+        {"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SUCCESS"},
+        {"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SKIPPED"},
+        {"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "FAILURE"},
+        {"__typename": "CheckRun", "status": "IN_PROGRESS", "conclusion": ""},
+        {"__typename": "StatusContext", "state": "PENDING"},
+        {"__typename": "StatusContext", "state": "ERROR"},
+    ]);
+    let summary = super::PrChecksSummary::from_status_check_rollup(&rollup).unwrap();
+    assert_eq!(
+        summary,
+        super::PrChecksSummary {
+            passed: 2,
+            failed: 2,
+            pending: 2,
+        }
+    );
+    assert_eq!(summary.status(), super::PrChecksStatus::Failing);
+    assert_eq!(summary.badge(), "CI ✗ 2/6");
+}
+
+#[test]
+fn pr_checks_summary_ignores_empty_state_on_check_runs() {
+    // gh may serialize the StatusContext-only `state` field as "" on CheckRun entries.
+    let rollup = serde_json::json!([
+        {"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SUCCESS", "state": ""},
+    ]);
+    let summary = super::PrChecksSummary::from_status_check_rollup(&rollup).unwrap();
+    assert_eq!(summary.status(), super::PrChecksStatus::Passing);
+    assert_eq!(summary.badge(), "CI ✓");
+}
+
+#[test]
+fn pr_checks_summary_pending_badge_counts_finished_checks() {
+    let rollup = serde_json::json!([
+        {"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SUCCESS"},
+        {"__typename": "CheckRun", "status": "QUEUED"},
+    ]);
+    let summary = super::PrChecksSummary::from_status_check_rollup(&rollup).unwrap();
+    assert_eq!(summary.badge(), "CI … 1/2");
+    assert_eq!(
+        super::PrChecksStatus::from_badge(&summary.badge()),
+        Some(super::PrChecksStatus::Pending)
+    );
+}
+
+#[test]
+fn pr_checks_summary_is_none_without_checks() {
+    assert_eq!(
+        super::PrChecksSummary::from_status_check_rollup(&serde_json::json!([])),
+        None
+    );
+    assert_eq!(
+        super::PrChecksSummary::from_status_check_rollup(&serde_json::Value::Null),
+        None
+    );
+}

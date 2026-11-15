@@ -4,14 +4,51 @@ use super::{
 use crate::context_chips::display_chip::PromptChipShellCommand;
 use crate::context_chips::display_menu::GenericMenuItem;
 use crate::context_chips::git_branch_on_click::GitBranchOnClickValue;
-use crate::context_chips::{ContextChipKind, github_pr_display_text_from_url};
+use crate::context_chips::{
+    ContextChipKind, github_pr_chip_value, github_pr_display_text_from_url,
+    split_github_pr_chip_value,
+};
 use crate::ui_components::icons::Icon;
+use crate::util::git::{PrChecksStatus, PrChecksSummary};
 
 #[test]
 fn test_github_pr_display_text_from_url() {
     assert_eq!(
         github_pr_display_text_from_url("https://github.com/warp/warp/pull/123"),
         Some("PR #123".to_string())
+    );
+}
+
+#[test]
+fn test_github_pr_chip_value_round_trips_checks_badge() {
+    let url = "https://github.com/warp/warp/pull/12";
+    let failing = PrChecksSummary {
+        passed: 5,
+        failed: 2,
+        pending: 0,
+    };
+    let value = github_pr_chip_value(url, Some(&failing));
+    assert_eq!(value, "https://github.com/warp/warp/pull/12 CI ✗ 2/7");
+    let (parsed_url, badge) = split_github_pr_chip_value(&value);
+    assert_eq!(parsed_url, url);
+    assert_eq!(
+        badge.and_then(PrChecksStatus::from_badge),
+        Some(PrChecksStatus::Failing)
+    );
+    assert_eq!(
+        github_pr_display_text_from_url(&value),
+        Some("PR #12 · CI ✗ 2/7".to_string())
+    );
+}
+
+#[test]
+fn test_github_pr_chip_value_without_checks_is_plain_url() {
+    let url = "https://github.com/warp/warp/pull/12";
+    assert_eq!(github_pr_chip_value(url, None), url);
+    assert_eq!(split_github_pr_chip_value(url), (url, None));
+    assert_eq!(
+        github_pr_display_text_from_url(url),
+        Some("PR #12".to_string())
     );
 }
 

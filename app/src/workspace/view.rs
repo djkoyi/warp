@@ -2,6 +2,8 @@ pub(crate) mod agent_cli_launch_modal;
 pub(crate) mod auto_handoff_sleep_modal;
 mod build_plan_migration_modal;
 pub(crate) mod chatgpt_plan_modal;
+#[cfg(feature = "local_fs")]
+mod claude_worktree_actions;
 pub(crate) mod cloud_agent_capacity_modal;
 pub(crate) mod codex_modal;
 pub mod conversation_list;
@@ -24665,6 +24667,14 @@ impl TypedActionView for Workspace {
                 self.close_new_session_dropdown_menu(ctx);
                 self.open_folder_picker_for_worktree_submenu(ctx);
             }
+            #[cfg(feature = "local_fs")]
+            NewClaudeWorktreeSession => self.new_claude_worktree_session(ctx),
+            #[cfg(feature = "local_fs")]
+            ListClaudeWorktrees => self.list_claude_worktrees(ctx),
+            #[cfg(feature = "local_fs")]
+            CleanupClaudeWorktrees => self.cleanup_claude_worktrees(ctx),
+            #[cfg(not(feature = "local_fs"))]
+            NewClaudeWorktreeSession | ListClaudeWorktrees | CleanupClaudeWorktrees => {}
             AutoupdateFailureLink => self.open_autoupdate_failure_link(ctx),
             ApplyUpdate => self.apply_update(ctx),
             LogOut => {

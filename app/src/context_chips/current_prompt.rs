@@ -23,7 +23,7 @@ use super::context_chip::{
 };
 use super::logging::{ChipCommandLogEntry, PromptChipExecutionPhase, PromptChipLogger};
 use super::prompt::Prompt;
-use super::{ChipResult, ChipValue, ContextChipKind, chips_to_string};
+use super::{ChipResult, ChipValue, ContextChipKind, chips_to_string, github_pr_chip_value};
 use crate::CLIAgentSessionsModel;
 use crate::ai::blocklist::agent_view::AgentViewController;
 use crate::code_review::git_repo_model::{GitRepoStatusEvent, GitRepoStatusModel};
@@ -1645,9 +1645,11 @@ impl CurrentPrompt {
             .as_ref()
             .and_then(|w| w.upgrade(ctx))
             .and_then(|h| {
-                h.as_ref(ctx)
-                    .pr_info(ctx)
-                    .map(|info| ChipValue::Text(info.url.clone()))
+                let model = h.as_ref(ctx);
+                model.pr_info(ctx).map(|info| {
+                    let checks = model.pr_checks(ctx);
+                    ChipValue::Text(github_pr_chip_value(&info.url, checks.as_ref()))
+                })
             });
         let current_pr = self
             .latest_chip_value(&ContextChipKind::GithubPullRequest)

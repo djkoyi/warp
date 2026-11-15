@@ -27879,6 +27879,7 @@ impl TypedActionView for TerminalView {
             | ToggleTodoPopup
             | CloseTodoPopup
             | ToggleCodeReviewPane { .. }
+            | ReviewCliAgentChanges
             | OpenProjectRulesPane
             | InitProject
             | IndexProjectSpeedbump
@@ -28762,6 +28763,16 @@ impl TypedActionView for TerminalView {
                     focus_new_pane: true,
                     cli_agent: None,
                 }));
+            }
+            ReviewCliAgentChanges => {
+                let cli_agent = self.active_cli_agent(ctx);
+                self.toggle_code_review_pane(
+                    GitDeltaPreference::Always,
+                    CodeReviewPaneEntrypoint::CLIAgentView,
+                    cli_agent,
+                    true, /* focus_new_pane */
+                    ctx,
+                );
             }
             InitProject => self.init_project(false, ctx),
             SetupCloudEnvironment(repos) => {

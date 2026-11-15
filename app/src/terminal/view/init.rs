@@ -42,6 +42,7 @@ pub const TOGGLE_QUEUE_NEXT_PROMPT_KEYBINDING: &str = "terminal:toggle_queue_nex
 pub const TOGGLE_HIDE_CLI_RESPONSES_KEYBINDING: &str = "terminal:toggle_hide_cli_responses";
 pub const OPEN_CLI_AGENT_RICH_INPUT_KEYBINDING: &str = "terminal:open_cli_agent_rich_input";
 pub const ATTACH_FILE_KEYBINDING: &str = "terminal:attach_file";
+pub const REVIEW_CLI_AGENT_CHANGES_KEYBINDING: &str = "terminal:review_cli_agent_changes";
 pub const CYCLE_NEXT_ORCHESTRATION_CHILD_AGENT_KEYBINDING: &str =
     "terminal:cycle_next_orchestration_child_agent";
 pub const CYCLE_PREVIOUS_ORCHESTRATION_CHILD_AGENT_KEYBINDING: &str =
@@ -324,6 +325,16 @@ pub fn init(app: &mut AppContext) {
             // not on the editor — see #9916).
             | (id!("Terminal") & !id!("IMEOpen") & id!(flags::CLI_AGENT_RICH_INPUT_OPEN)),
         ),
+        // Deliberately not gated on Warp AI: review comments go to the CLI agent's PTY.
+        EditableBinding::new(
+            REVIEW_CLI_AGENT_CHANGES_KEYBINDING,
+            "Claude Code: revisar cambios (diff con comentarios por línea)",
+            TerminalAction::ReviewCliAgentChanges,
+        )
+        .with_group(bindings::BindingGroup::Terminal.as_str())
+        .with_enabled(|| cfg!(feature = "local_fs"))
+        .with_mac_key_binding("cmd-alt-r")
+        .with_context_predicate(id!("Terminal") & !id!("IMEOpen")),
         EditableBinding::new(
             "terminal:warpify_subshell",
             "Warpify subshell",

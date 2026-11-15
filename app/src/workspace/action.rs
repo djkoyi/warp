@@ -846,6 +846,13 @@ pub enum WorkspaceAction {
     /// Open a folder picker to add a new repo to PersistedWorkspace (from the
     /// "New worktree config" submenu's "+ Add new repo..." item).
     OpenWorktreeAddRepoPicker,
+    /// Create a git worktree under `.claude/worktrees/` of the active tab's repository and open a
+    /// new tab there running Claude Code.
+    NewClaudeWorktreeSession,
+    /// Show the Claude worktrees of the active tab's repository and whether they are clean.
+    ListClaudeWorktrees,
+    /// Remove the clean Claude worktrees of the active tab's repository that no tab is using.
+    CleanupClaudeWorktrees,
     SaveCurrentTabAsNewConfig(usize),
     SyncTrafficLights,
     /// Opens a tab config file in the editor and dismisses the associated error toast.
@@ -1248,6 +1255,8 @@ impl WorkspaceAction {
             InstallOz | UninstallOz => false,
             #[cfg(target_os = "macos")]
             InstallWarpctrl | UninstallWarpctrl => false,
+            // The worktree tab is added asynchronously, which saves state on its own.
+            NewClaudeWorktreeSession | ListClaudeWorktrees | CleanupClaudeWorktrees => false,
             #[cfg(feature = "local_fs")]
             FileRenamed { .. } => false, // File rename doesn't change workspace state
             #[cfg(feature = "local_fs")]
