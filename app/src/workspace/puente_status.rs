@@ -109,7 +109,7 @@ impl PuenteStatus {
                     .collect();
                 if equipos.len() > MAX_TOOLTIP_EQUIPOS {
                     let restantes = equipos.len() - MAX_TOOLTIP_EQUIPOS;
-                    lines.push(format!("(+{restantes} mas)"));
+                    lines.push(format!("(+{restantes} más)"));
                 }
                 lines
             }
