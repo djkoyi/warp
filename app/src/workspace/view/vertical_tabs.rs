@@ -59,6 +59,8 @@ use crate::tab::{
     SelectedTabColor, TAB_INDICATOR_SYNCED_COLOR, TabData, reveals_tab_shortcut_hints,
     tab_activate_binding_name, tab_position_id,
 };
+use crate::terminal::cli_agent_sessions::meters::now_epoch_secs;
+use crate::terminal::cli_agent_sessions::tab_details::{self, ClaudeTabField, ClaudeTabRow};
 use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, meters_ui};
 use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::view::TerminalViewState;
@@ -728,6 +730,7 @@ pub(super) struct VerticalTabsPanelState {
     show_pr_link_info_tooltip_mouse_state: MouseStateHandle,
     show_diff_stats_mouse_state: MouseStateHandle,
     show_details_on_hover_mouse_state: MouseStateHandle,
+    claude_field_mouse_states: [MouseStateHandle; ClaudeTabField::ALL.len()],
     panel_right_click_mouse_state: MouseStateHandle,
     pub(super) show_settings_popup: bool,
 }
@@ -766,6 +769,7 @@ impl Default for VerticalTabsPanelState {
             show_pr_link_info_tooltip_mouse_state: Default::default(),
             show_diff_stats_mouse_state: Default::default(),
             show_details_on_hover_mouse_state: Default::default(),
+            claude_field_mouse_states: Default::default(),
             panel_right_click_mouse_state: Default::default(),
             show_settings_popup: false,
         }
@@ -4556,6 +4560,10 @@ fn render_terminal_row_content(
     let working_directory = resolved_terminal_working_directory(terminal_view, app)
         .unwrap_or_else(|| title_text.clone());
 
+    if let Some(card) = claude_card_text(terminal_view, app) {
+        return render_claude_terminal_row_content(props, terminal_view, card, appearance, app);
+    }
+
     let git_branch = terminal_view.current_git_branch(app);
 
     // Line 1 and line 2 depend on the "Pane title as" setting.
@@ -4677,6 +4685,115 @@ fn render_terminal_row_content(
     content.finish()
 }
 
+/// Title and location of a vertical tab card for a Claude Code session.
+struct ClaudeCardText {
+    title: String,
+    location: String,
+}
+
+fn claude_card_text(terminal_view: &TerminalView, app: &AppContext) -> Option<ClaudeCardText> {
+    let session = CLIAgentSessionsModel::as_ref(app).session(terminal_view.id())?;
+    if !matches!(session.agent, CLIAgent::Claude) {
+        return None;
+    }
+    let title = tab_details::conversation_title(&terminal_view.terminal_title_from_shell())
+        .or_else(|| session.session_context.title_like_text())
+        .unwrap_or_else(|| tab_details::CLAUDE_FALLBACK_TITLE.to_string());
+    let working_directory = resolved_terminal_working_directory(terminal_view, app);
+    let git_branch = terminal_view.current_git_branch(app);
+    Some(ClaudeCardText {
+        title,
+        location: tab_details::location_line(working_directory.as_deref(), git_branch.as_deref()),
+    })
+}
+
+fn claude_tab_row(terminal_view_id: EntityId, app: &AppContext) -> ClaudeTabRow {
+    if !meters_ui::meters_enabled(app) {
+        return ClaudeTabRow::Hidden;
+    }
+    let sessions = CLIAgentSessionsModel::as_ref(app);
+    let Some(session) = sessions.session(terminal_view_id) else {
+        return ClaudeTabRow::Hidden;
+    };
+    let tab_settings = TabSettings::as_ref(app);
+    tab_details::tab_row_for_session(
+        session,
+        sessions.meters(terminal_view_id),
+        meters_ui::compaction_warning_threshold(app),
+        |field| tab_settings.claude_tab_field_enabled(field),
+    )
+}
+
+/// Expanded card of a Claude Code session: conversation title, `carpeta · rama`, and a row with
+/// the Claude meters enabled in the settings popup next to the diff and PR chips.
+fn render_claude_terminal_row_content(
+    props: &PaneProps<'_>,
+    terminal_view: &TerminalView,
+    card: ClaudeCardText,
+    appearance: &Appearance,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let main_text_color = theme.main_text_color(theme.background());
+    let sub_text_color = theme.sub_text_color(theme.background());
+    let ClaudeCardText { title, location } = card;
+
+    let first_line = render_pane_title_slot(
+        props,
+        || render_text_line(&title, main_text_color, ClipConfig::ellipsis(), appearance),
+        12.,
+        main_text_color,
+        ClipConfig::ellipsis(),
+        appearance,
+        app,
+    );
+    let first_line_element = render_row_title_line(
+        first_line,
+        row_shows_synced_inputs_indicator(props, app),
+        has_unread_activity(&props.typed, app),
+        shortcut_hint_label(props, app).map(|label| render_shortcut_hint(&label, appearance)),
+        theme,
+    );
+    let metadata_left = match tab_details::render_tab_row(
+        &claude_tab_row(terminal_view.id(), app),
+        10.,
+        appearance,
+    ) {
+        Some(element) => MetadataLeftContent::Element(element),
+        None => MetadataLeftContent::GitBranch(None),
+    };
+
+    let mut content = Flex::column()
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_cross_axis_alignment(CrossAxisAlignment::Start);
+    content.add_child(first_line_element);
+    content.add_child(
+        Container::new(render_text_line(
+            &location,
+            sub_text_color,
+            ClipConfig::ellipsis(),
+            appearance,
+        ))
+        .with_margin_top(2.)
+        .finish(),
+    );
+    content.add_child(
+        Container::new(render_terminal_metadata_line(
+            terminal_view,
+            props.pane_group_id,
+            props.pane_id,
+            metadata_left,
+            chip_entrypoint_for_granularity(props.display_granularity),
+            &props.badge_mouse_states,
+            appearance,
+            app,
+        ))
+        .with_margin_top(2.)
+        .finish(),
+    );
+    content.finish()
+}
+
 fn chip_entrypoint_for_granularity(
     granularity: VerticalTabsDisplayGranularity,
 ) -> VerticalTabsChipEntrypoint {
@@ -4738,6 +4855,7 @@ fn render_git_branch_text(
 enum MetadataLeftContent {
     GitBranch(Option<String>),
     WorkingDirectory(String),
+    Element(Box<dyn Element>),
 }
 
 fn render_text_line(
@@ -5512,6 +5630,7 @@ fn render_terminal_metadata_line(
                 .finish(),
         )
         .finish(),
+        MetadataLeftContent::Element(element) => Shrinkable::new(1., element).finish(),
         _ => Empty::new().finish(),
     };
     meta.add_child(left_element);
@@ -5656,7 +5775,7 @@ fn render_terminal_pull_request_badge(
 }
 
 /// Context usage and activity of the CLI agent in this terminal, if meters are enabled and there is
-/// anything to show.
+/// anything to show. Claude Code sessions show their meters on a row of their own instead.
 fn cli_agent_meter_segments(
     terminal_view_id: EntityId,
     app: &AppContext,
@@ -5665,7 +5784,9 @@ fn cli_agent_meter_segments(
         return None;
     }
     let sessions = CLIAgentSessionsModel::as_ref(app);
-    let session = sessions.session(terminal_view_id)?;
+    let session = sessions
+        .session(terminal_view_id)
+        .filter(|session| !matches!(session.agent, CLIAgent::Claude))?;
     let meters = sessions.meters(terminal_view_id);
     let segments = meters_ui::tab_segments(
         meters_ui::session_activity(session, meters),
@@ -5908,28 +6029,22 @@ fn subtitle_options_for_primary(
 ) -> [(VerticalTabsCompactSubtitle, &'static str); 2] {
     match primary {
         VerticalTabsPrimaryInfo::Command => [
-            (VerticalTabsCompactSubtitle::Branch, "Branch"),
-            (
-                VerticalTabsCompactSubtitle::WorkingDirectory,
-                "Working Directory",
-            ),
+            (VerticalTabsCompactSubtitle::Branch, "Rama"),
+            (VerticalTabsCompactSubtitle::WorkingDirectory, "Carpeta"),
         ],
         VerticalTabsPrimaryInfo::WorkingDirectory => [
-            (VerticalTabsCompactSubtitle::Branch, "Branch"),
+            (VerticalTabsCompactSubtitle::Branch, "Rama"),
             (
                 VerticalTabsCompactSubtitle::Command,
-                "Command / Conversation",
+                "Comando / conversación",
             ),
         ],
         VerticalTabsPrimaryInfo::Branch => [
             (
                 VerticalTabsCompactSubtitle::Command,
-                "Command / Conversation",
+                "Comando / conversación",
             ),
-            (
-                VerticalTabsCompactSubtitle::WorkingDirectory,
-                "Working Directory",
-            ),
+            (VerticalTabsCompactSubtitle::WorkingDirectory, "Carpeta"),
         ],
     }
 }
@@ -5940,6 +6055,8 @@ pub(super) fn render_settings_popup(
 ) -> Box<dyn Element> {
     const SETTINGS_POPUP_CORNER_RADIUS: f32 = 6.;
     const SETTINGS_POPUP_MENU_ITEM_FONT_SIZE: f32 = 12.;
+    /// Wide enough for the longest Spanish label ("Mostrar detalles al pasar el mouse").
+    const SETTINGS_POPUP_WIDTH: f32 = 250.;
 
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
@@ -5971,7 +6088,7 @@ pub(super) fn render_settings_popup(
     let sub_text = theme.sub_text_color(theme.background());
     let view_as_header = Container::new(
         Text::new_inline(
-            "View as".to_string(),
+            "Ver como".to_string(),
             appearance.ui_font_family(),
             SETTINGS_POPUP_MENU_ITEM_FONT_SIZE,
         )
@@ -5990,7 +6107,7 @@ pub(super) fn render_settings_popup(
                 Expanded::new(
                     1.,
                     render_popup_text_segment(
-                        "Panes",
+                        "Paneles",
                         matches!(current_granularity, VerticalTabsDisplayGranularity::Panes),
                         state.panes_segment_mouse_state.clone(),
                         VerticalTabsDisplayGranularity::Panes,
@@ -6004,7 +6121,7 @@ pub(super) fn render_settings_popup(
                 Expanded::new(
                     1.,
                     render_popup_text_segment(
-                        "Tabs",
+                        "Pestañas",
                         matches!(current_granularity, VerticalTabsDisplayGranularity::Tabs),
                         state.tabs_segment_mouse_state.clone(),
                         VerticalTabsDisplayGranularity::Tabs,
@@ -6030,7 +6147,7 @@ pub(super) fn render_settings_popup(
 
     let tab_item_header = Container::new(
         Text::new_inline(
-            "Tab item".to_string(),
+            "Elemento de pestaña".to_string(),
             appearance.ui_font_family(),
             SETTINGS_POPUP_MENU_ITEM_FONT_SIZE,
         )
@@ -6042,7 +6159,7 @@ pub(super) fn render_settings_popup(
     .finish();
 
     let focused_session_option = render_tab_item_mode_option(
-        "Focused session",
+        "Sesión enfocada",
         matches!(
             current_tab_item_mode,
             VerticalTabsTabItemMode::FocusedSession
@@ -6055,7 +6172,7 @@ pub(super) fn render_settings_popup(
 
     let summary_option = if FeatureFlag::VerticalTabsSummaryMode.is_enabled() {
         Some(render_tab_item_mode_option(
-            "Summary",
+            "Resumen",
             matches!(current_tab_item_mode, VerticalTabsTabItemMode::Summary),
             state.summary_option_mouse_state.clone(),
             VerticalTabsTabItemMode::Summary,
@@ -6068,7 +6185,7 @@ pub(super) fn render_settings_popup(
 
     let density_header = Container::new(
         Text::new_inline(
-            "Density".to_string(),
+            "Densidad".to_string(),
             appearance.ui_font_family(),
             SETTINGS_POPUP_MENU_ITEM_FONT_SIZE,
         )
@@ -6127,7 +6244,7 @@ pub(super) fn render_settings_popup(
         .with_padding_bottom(4.)
         .finish();
 
-    // Divider between toggle and "Pane title as" section
+    // Divider between toggle and "Título del panel" section
     let make_divider = |theme: &WarpTheme| {
         Container::new(
             ConstrainedBox::new(
@@ -6145,7 +6262,7 @@ pub(super) fn render_settings_popup(
 
     let pane_title_header = Container::new(
         Text::new_inline(
-            "Pane title as".to_string(),
+            "Título del panel".to_string(),
             appearance.ui_font_family(),
             SETTINGS_POPUP_MENU_ITEM_FONT_SIZE,
         )
@@ -6157,7 +6274,7 @@ pub(super) fn render_settings_popup(
     .finish();
 
     let command_option = render_primary_info_option(
-        "Command / Conversation",
+        "Comando / conversación",
         matches!(current_primary_info, VerticalTabsPrimaryInfo::Command),
         state.command_option_mouse_state.clone(),
         VerticalTabsPrimaryInfo::Command,
@@ -6166,7 +6283,7 @@ pub(super) fn render_settings_popup(
     );
 
     let directory_option = render_primary_info_option(
-        "Working Directory",
+        "Carpeta",
         matches!(
             current_primary_info,
             VerticalTabsPrimaryInfo::WorkingDirectory
@@ -6178,7 +6295,7 @@ pub(super) fn render_settings_popup(
     );
 
     let branch_option = render_primary_info_option(
-        "Branch",
+        "Rama",
         matches!(current_primary_info, VerticalTabsPrimaryInfo::Branch),
         state.branch_option_mouse_state.clone(),
         VerticalTabsPrimaryInfo::Branch,
@@ -6190,6 +6307,26 @@ pub(super) fn render_settings_popup(
     let mut popup_col = Flex::column()
         .with_main_axis_size(MainAxisSize::Min)
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+    popup_col.add_child(render_popup_section_header(
+        "Claude en la pestaña",
+        appearance,
+    ));
+    let tab_settings = TabSettings::as_ref(app);
+    for (field, mouse_state) in ClaudeTabField::ALL
+        .into_iter()
+        .zip(state.claude_field_mouse_states.iter())
+    {
+        popup_col.add_child(render_show_toggle_option(
+            field.label(),
+            tab_settings.claude_tab_field_enabled(field),
+            mouse_state.clone(),
+            WorkspaceAction::ToggleVerticalTabsClaudeField(field),
+            None,
+            appearance,
+            theme,
+        ));
+    }
+    popup_col.add_child(make_divider(theme));
     popup_col.add_child(view_as_header);
     popup_col.add_child(view_as_segmented_control_row);
     if show_tab_item_section {
@@ -6216,7 +6353,7 @@ pub(super) fn render_settings_popup(
 
             let subtitle_header = Container::new(
                 Text::new_inline(
-                    "Additional metadata".to_string(),
+                    "Datos adicionales".to_string(),
                     appearance.ui_font_family(),
                     SETTINGS_POPUP_MENU_ITEM_FONT_SIZE,
                 )
@@ -6250,7 +6387,7 @@ pub(super) fn render_settings_popup(
 
             let show_header = Container::new(
                 Text::new_inline(
-                    "Show".to_string(),
+                    "Mostrar".to_string(),
                     appearance.ui_font_family(),
                     SETTINGS_POPUP_MENU_ITEM_FONT_SIZE,
                 )
@@ -6267,14 +6404,14 @@ pub(super) fn render_settings_popup(
             let pr_link_info_tooltip = if show_pr_link && pr_validation_suppressed {
                 Some(ShowToggleInfoTooltip {
                     mouse_state: state.show_pr_link_info_tooltip_mouse_state.clone(),
-                    tooltip_text: "Requires the GitHub CLI to be installed and authenticated",
+                    tooltip_text: "Requiere la CLI de GitHub instalada y autenticada",
                 })
             } else {
                 None
             };
 
             popup_col.add_child(render_show_toggle_option(
-                "PR link",
+                "Enlace al PR",
                 show_pr_link,
                 state.show_pr_link_mouse_state.clone(),
                 WorkspaceAction::ToggleVerticalTabsShowPrLink,
@@ -6283,7 +6420,7 @@ pub(super) fn render_settings_popup(
                 theme,
             ));
             popup_col.add_child(render_show_toggle_option(
-                "Diff stats",
+                "Cambios (diff)",
                 show_diff_stats,
                 state.show_diff_stats_mouse_state.clone(),
                 WorkspaceAction::ToggleVerticalTabsShowDiffStats,
@@ -6296,7 +6433,7 @@ pub(super) fn render_settings_popup(
     popup_col.add_child(make_divider(theme));
 
     popup_col.add_child(render_show_toggle_option(
-        "Show details on hover",
+        "Mostrar detalles al pasar el mouse",
         show_details_on_hover,
         state.show_details_on_hover_mouse_state.clone(),
         WorkspaceAction::ToggleVerticalTabsShowDetailsOnHover,
@@ -6316,10 +6453,22 @@ pub(super) fn render_settings_popup(
                 .with_drop_shadow(DropShadow::default())
                 .finish(),
         )
-        .with_width(200.)
+        .with_width(SETTINGS_POPUP_WIDTH)
         .finish(),
     )
     .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
+    .finish()
+}
+
+fn render_popup_section_header(label: &str, appearance: &Appearance) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    Container::new(
+        Text::new_inline(label.to_string(), appearance.ui_font_family(), 12.)
+            .with_color(theme.sub_text_color(theme.background()).into())
+            .finish(),
+    )
+    .with_horizontal_padding(16.)
+    .with_margin_bottom(4.)
     .finish()
 }
 
@@ -6990,15 +7139,18 @@ fn render_terminal_detail_section(
     };
 
     let title_text = terminal_view.terminal_title_from_shell();
-    let primary_line = terminal_primary_line_data(
-        terminal_view.is_long_running_and_user_controlled(),
-        conversation_display_title,
-        cli_agent_title,
-        title_text.as_str(),
-        working_directory.as_deref().unwrap_or(title_text.as_str()),
-        terminal_title_fallback_font(&agent_text),
-        terminal_view.last_completed_command_text(),
-    );
+    let primary_line = match claude_card_text(terminal_view, app) {
+        Some(card) => TerminalPrimaryLineData::StatusText { text: card.title },
+        None => terminal_primary_line_data(
+            terminal_view.is_long_running_and_user_controlled(),
+            conversation_display_title,
+            cli_agent_title,
+            title_text.as_str(),
+            working_directory.as_deref().unwrap_or(title_text.as_str()),
+            terminal_title_fallback_font(&agent_text),
+            terminal_view.last_completed_command_text(),
+        ),
+    };
 
     let mut section = Flex::column()
         .with_cross_axis_alignment(CrossAxisAlignment::Start)
@@ -7071,10 +7223,69 @@ fn render_terminal_detail_section(
         metadata_row.add_child(right_badges.finish());
     }
     section.add_child(metadata_row.finish());
+    if let Some(claude_section) =
+        render_claude_detail_section(terminal_view, &text_colors, appearance, app)
+    {
+        section.add_child(claude_section);
+    }
 
     Container::new(section.finish())
         .with_padding(Padding::uniform(DETAIL_SIDECAR_SECTION_PADDING))
         .finish()
+}
+
+/// Everything the Claude Code session reports, for the hover sidecar. `None` for other terminals
+/// and while the session has not reported anything.
+fn render_claude_detail_section(
+    terminal_view: &TerminalView,
+    text_colors: &DetailSidecarTextColors,
+    appearance: &Appearance,
+    app: &AppContext,
+) -> Option<Box<dyn Element>> {
+    if !meters_ui::meters_enabled(app) {
+        return None;
+    }
+    let sessions = CLIAgentSessionsModel::as_ref(app);
+    let session = sessions
+        .session(terminal_view.id())
+        .filter(|session| matches!(session.agent, CLIAgent::Claude))?;
+    let meters = sessions.meters(terminal_view.id());
+    if !tab_details::session_reports(session, meters) {
+        return None;
+    }
+    let activity = meters_ui::session_activity(session, meters);
+    let lines = match meters {
+        Some(meters) => tab_details::detail_lines(
+            activity,
+            meters,
+            meters_ui::compaction_warning_threshold(app),
+            now_epoch_secs(),
+        ),
+        None => Vec::new(),
+    };
+
+    let mut column = Flex::column()
+        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_spacing(4.)
+        .with_child(render_detail_wrapping_text(
+            "Claude",
+            12.,
+            text_colors.main,
+            Some(Properties::default().weight(Weight::Semibold)),
+            appearance,
+        ));
+    if lines.is_empty() {
+        column.add_child(render_detail_wrapping_text(
+            tab_details::WAITING_FIRST_MESSAGE,
+            11.,
+            text_colors.sub,
+            None,
+            appearance,
+        ));
+    } else {
+        column.add_child(tab_details::render_detail_lines(&lines, 11., appearance));
+    }
+    Some(column.finish())
 }
 
 fn render_code_detail_section(
@@ -7433,7 +7644,30 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
     // Build title (line 1) based on "Pane title as" and subtitle (line 2) based on
     // "Additional metadata" setting.
     let (title_element, subtitle_element): (Box<dyn Element>, Option<Box<dyn Element>>) =
-        if let TypedPane::Terminal(terminal_pane) = &props.typed {
+        if let TypedPane::Terminal(terminal_pane) = &props.typed
+            && let Some(card) = claude_card_text(terminal_pane.terminal_view(app).as_ref(app), app)
+        {
+            let ClaudeCardText { title, location } = card;
+            let title_element = render_pane_title_slot(
+                &props,
+                || {
+                    Text::new_inline(title.clone(), font_family, 12.)
+                        .with_clip(ClipConfig::ellipsis())
+                        .with_color(main_text_color.into())
+                        .finish()
+                },
+                12.,
+                main_text_color,
+                ClipConfig::ellipsis(),
+                appearance,
+                app,
+            );
+            let subtitle = Text::new_inline(location, font_family, 10.)
+                .with_clip(ClipConfig::ellipsis())
+                .with_color(sub_text_color.into())
+                .finish();
+            (title_element, Some(subtitle))
+        } else if let TypedPane::Terminal(terminal_pane) = &props.typed {
             let terminal_view = terminal_pane.terminal_view(app).as_ref(app);
             let terminal_title = terminal_view.terminal_title_from_shell();
             let git_branch = terminal_view.current_git_branch(app);
