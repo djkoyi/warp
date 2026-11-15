@@ -1173,6 +1173,9 @@ pub struct Workspace {
     /// Meter segments each CLI agent terminal's tab showed at the last re-render, so meter updates
     /// that change nothing visible skip the re-render.
     rendered_tab_meter_segments: HashMap<EntityId, Vec<MeterSegment>>,
+    /// Segments the global usage chip (top bar) showed at the last re-render, so meter updates that
+    /// only change the account 5h/7d/cost still repaint it even when the tab is unchanged.
+    rendered_global_meter_segments: Vec<MeterSegment>,
     cloud_agent_capacity_modal: ViewHandle<CloudAgentCapacityModal>,
     free_ai_removal_modal: ViewHandle<FreeAiRemovalModal>,
     /// Second instance of the free-AI-removal modal, opened on demand when a
