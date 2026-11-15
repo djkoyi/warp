@@ -48,6 +48,10 @@ CHAIN_TIMEOUT_SECS = 5
 MAX_TRANSCRIPT_READ_BYTES = 8 * 1024 * 1024
 # An unchanged status line is re-sent this often, so a pane that missed it still catches up.
 UNCHANGED_RESEND_SECS = 30
+# "hook" or "statusline"; set by main().
+MODE = "statusline"
+# Sequences a hook returns to Claude Code as `terminalSequence`.
+PENDING_SEQUENCES = []
 
 
 def claude_dir():
@@ -108,16 +112,60 @@ def send(payload, dedupe_key=None):
     if dedupe_key is not None and is_unchanged(dedupe_key, body):
         return
     sequence = "\x1b]777;notify;%s;%s\x07" % (SENTINEL, body)
+    # Claude Code 2.1.141+ gives hooks and the status line no controlling terminal. Hooks hand
+    # the sequence back as `terminalSequence`; the status line parks it for the next hook.
+    if MODE == "hook" and supports_terminal_sequence():
+        PENDING_SEQUENCES.append(sequence)
+        return
+    if write_tty(sequence):
+        return
+    if MODE == "statusline":
+        park_sequence(payload.get("session_id"), sequence)
+        if dedupe_key is not None:
+            forget_sent(dedupe_key)
+
+
+def write_tty(sequence):
     try:
         fd = os.open("/dev/tty", os.O_WRONLY | getattr(os, "O_NOCTTY", 0))
     except OSError:
-        return
+        return False
     try:
         os.write(fd, sequence.encode("ascii"))
+        return True
     except OSError:
-        pass
+        return False
     finally:
         os.close(fd)
+
+
+TERMINAL_SEQUENCE_MIN_VERSION = (2, 1, 141)
+
+
+def supports_terminal_sequence():
+    match = re.search(r"(\d+)\.(\d+)\.(\d+)", os.environ.get("CLAUDE_CODE_VERSION") or "")
+    if not match:
+        return False
+    return tuple(int(part) for part in match.groups()) >= TERMINAL_SEQUENCE_MIN_VERSION
+
+
+def park_sequence(session_id, sequence):
+    path = state_path(session_id, ".pending")
+    if path:
+        write_state_file(path, sequence)
+
+
+def take_parked_sequence(session_id):
+    path = state_path(session_id, ".pending")
+    if not path:
+        return None
+    try:
+        with open(path, encoding="ascii") as handle:
+            sequence = handle.read()
+        os.remove(path)
+    except (OSError, UnicodeDecodeError):
+        return None
+    return sequence if sequence.startswith("\x1b]777;notify;") else None
 
 
 def common_fields(data):
@@ -438,6 +486,11 @@ def run_hook():
         return
     name = data.get("hook_event_name")
     base = common_fields(data)
+    # Meters the status line could not deliver ride along with this hook's output.
+    if in_warp() and supports_terminal_sequence():
+        parked = take_parked_sequence(data.get("session_id"))
+        if parked:
+            PENDING_SEQUENCES.append(parked)
     if name == "SessionStart":
         forget_sent(data.get("session_id"))
     lifecycle = lifecycle_enabled()
@@ -488,7 +541,9 @@ def run_hook():
 
 
 def main():
+    global MODE
     mode = sys.argv[1] if len(sys.argv) > 1 else "statusline"
+    MODE = "hook" if mode == "hook" else "statusline"
     try:
         if mode == "hook":
             run_hook()
@@ -496,6 +551,9 @@ def main():
             run_statusline()
     except Exception:
         pass
+    if MODE == "hook" and PENDING_SEQUENCES:
+        sys.stdout.write(json.dumps({"terminalSequence": "".join(PENDING_SEQUENCES)}))
+        sys.stdout.flush()
     return 0
 
 

@@ -316,7 +316,6 @@ pub enum SettingsViewEvent {
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum SettingsSection {
     About,
-    #[default]
     Account,
     BillingAndUsage,
     Appearance,
@@ -338,6 +337,8 @@ pub enum SettingsSection {
     // ── Claude Code umbrella subpages ──
     /// The MCP subpage. Keeps the original `ClaudeCode` name and slug so Cmd+Alt+, deeplinks and
     /// restored sessions that point at the old single page land on the first subpage.
+    // CSS fork: Settings opens on Claude Code (the Account page is hidden in this build).
+    #[default]
     ClaudeCode,
     ClaudeCodeSkills,
     ClaudeCodePlugins,
