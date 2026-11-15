@@ -16,6 +16,13 @@ use crate::channel::ChannelState;
 use crate::themes::theme::ColorScheme;
 use crate::workspace::WorkspaceAction;
 
+const FORK_CREDIT_LINES: [&str; 4] = [
+    "VERSIÓN CAJA DE SEGURO SOCIAL",
+    "FORK: ING. FRANKLIN H. RODRÍGUEZ PALMA",
+    "DEPARTAMENTO DE INGENIERÍA DE SOFTWARE — RESPONSABLE",
+    "VERSIÓN MODIFICADA DE WARP (AGPL-3.0). CÓDIGO FUENTE: GITHUB.COM/DJKOYI/WARP",
+];
+
 pub struct AboutPageView {
     page: PageType<Self>,
 }
@@ -123,6 +130,14 @@ impl SettingsWidget for AboutPageWidget {
                         .with_margin_top(16.)
                         .finish(),
                 )
+                .with_children(FORK_CREDIT_LINES.iter().enumerate().map(|(index, line)| {
+                    ui_builder
+                        .span(*line)
+                        .with_soft_wrap()
+                        .build()
+                        .with_margin_top(if index == 0 { 12. } else { 4. })
+                        .finish()
+                }))
                 .finish(),
         )
         .finish()

@@ -1,3 +1,14 @@
+> **VERSIÓN CAJA DE SEGURO SOCIAL — FORK DE WARP**
+>
+> Este repositorio es un fork personal de [Warp](https://github.com/warpdotdev/warp),
+> mantenido por el Ing. Franklin H. Rodríguez Palma, Departamento de Ingeniería de
+> Software, Caja de Seguro Social (Panamá). Es una versión modificada y no oficial de
+> Warp. Licencias: MIT para los crates `warpui` y `warpui_core`; AGPL-3.0 para el resto,
+> conservando los avisos de derechos de autor originales. Código fuente:
+> https://github.com/djkoyi/warp. Más detalles en [FORK.md](FORK.md).
+
+---
+
 <a href="https://www.warp.dev">
     <img width="1024" alt="Warp Agentic Development Environment product preview" src="https://github.com/user-attachments/assets/9976b2da-2edd-4604-a36c-8fd53719c6d4" />
 </a>
