@@ -51,3 +51,71 @@ fn summaries_hide_secrets() {
         "{allow}"
     );
 }
+
+#[test]
+fn urls_hide_userinfo_and_query_values() {
+    assert_eq!(
+        mask_url("https://user:pw@host.io:8080/p/a?x=1&flag&k=#frag"),
+        "https://••••••@host.io:8080/p/a?x=••••••&flag&k=#frag"
+    );
+    assert_eq!(mask_url("https://host.io/mcp"), "https://host.io/mcp");
+    assert_eq!(mask_url("not a url"), "not a url");
+}
+
+#[test]
+fn args_hide_values_of_secret_flags() {
+    let args: Vec<String> = [
+        "-y",
+        "--API-KEY",
+        "abc",
+        "--auth-token=def",
+        "--verbose",
+        "--password",
+        "--next-flag",
+        "GITHUB_TOKEN=ghp",
+        "https://u:p@h",
+        "plain",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    assert_eq!(
+        mask_args(&args),
+        vec![
+            "-y",
+            "--API-KEY",
+            MASK,
+            "--auth-token=••••••",
+            "--verbose",
+            "--password",
+            "--next-flag",
+            "GITHUB_TOKEN=••••••",
+            "https://••••••@h",
+            "plain",
+        ]
+    );
+}
+
+#[test]
+fn merging_masked_args_and_urls_keeps_stored_values() {
+    let original: Vec<String> = ["--token", "t1", "--key=k2"].map(str::to_owned).to_vec();
+    let edited = mask_args(&original).join("\n") + "\n--extra";
+    assert_eq!(
+        merge_masked_args(&original, &edited).unwrap(),
+        vec!["--token", "t1", "--key=k2", "--extra"]
+    );
+    // Reordered lines still resolve to their own stored values.
+    assert_eq!(
+        merge_masked_args(&original, "--key=••••••\n--token\n••••••").unwrap(),
+        vec!["--key=k2", "--token", "t1"]
+    );
+    assert!(merge_masked_args(&original, "--other=••••••").is_err());
+
+    let url = "https://u:p@h/x?q=1";
+    assert_eq!(merge_masked_url(Some(url), &mask_url(url)).unwrap(), url);
+    assert_eq!(
+        merge_masked_url(Some(url), " https://new ").unwrap(),
+        "https://new"
+    );
+    assert!(merge_masked_url(Some(url), "https://••••••@other").is_err());
+    assert!(merge_masked_url(None, "https://••••••@h").is_err());
+}

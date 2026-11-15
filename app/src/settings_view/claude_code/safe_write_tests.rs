@@ -156,3 +156,119 @@ fn backup_and_remove_symlinked_directory_removes_only_the_link() {
     assert!(fs::symlink_metadata(&link).is_err());
     assert!(real.join("SKILL.md").exists());
 }
+
+#[cfg(unix)]
+#[test]
+fn new_files_are_private_and_existing_permissions_are_kept() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = TempDir::new().unwrap();
+    let fresh = dir.path().join("fresh.json");
+    atomic_write(&fresh, b"{}").unwrap();
+    assert_eq!(
+        fs::metadata(&fresh).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+
+    let shared = dir.path().join("shared.md");
+    fs::write(&shared, "old").unwrap();
+    fs::set_permissions(&shared, fs::Permissions::from_mode(0o644)).unwrap();
+    atomic_write(&shared, b"new").unwrap();
+    assert_eq!(
+        fs::metadata(&shared).unwrap().permissions().mode() & 0o777,
+        0o644
+    );
+}
+
+#[test]
+fn update_json_file_refuses_an_existing_empty_file() {
+    let dir = TempDir::new().unwrap();
+    let target = dir.path().join(".claude.json");
+    fs::write(&target, "  \n").unwrap();
+    let result = update_json_file(&dir.path().join("b"), &target, |root| {
+        root.insert("x".into(), json!(1));
+        Ok(())
+    });
+    assert!(result.is_err());
+    assert_eq!(fs::read_to_string(&target).unwrap(), "  \n");
+}
+
+#[test]
+fn update_json_file_retries_when_the_file_changes_concurrently() {
+    let dir = TempDir::new().unwrap();
+    let target = dir.path().join(".claude.json");
+    fs::write(&target, r#"{"a": 1}"#).unwrap();
+    let mut calls = 0;
+    update_json_file(&dir.path().join("b"), &target, |root| {
+        calls += 1;
+        if calls == 1 {
+            // Another process writes between our read and our rename.
+            fs::write(&target, r#"{"a": 1, "fromClaude": true}"#).unwrap();
+        }
+        root.insert("ours".into(), json!(true));
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(calls, 2);
+    let value: Value = serde_json::from_str(&fs::read_to_string(&target).unwrap()).unwrap();
+    assert_eq!(value, json!({"a": 1, "fromClaude": true, "ours": true}));
+}
+
+#[test]
+fn update_json_file_gives_up_after_repeated_conflicts() {
+    let dir = TempDir::new().unwrap();
+    let target = dir.path().join(".claude.json");
+    fs::write(&target, r#"{"n": 0}"#).unwrap();
+    let mut calls = 0;
+    let result = update_json_file(&dir.path().join("b"), &target, |root| {
+        calls += 1;
+        fs::write(&target, format!(r#"{{"n": {calls}}}"#)).unwrap();
+        root.insert("ours".into(), json!(true));
+        Ok(())
+    });
+    assert!(result.is_err());
+    assert_eq!(calls, 3);
+    let value: Value = serde_json::from_str(&fs::read_to_string(&target).unwrap()).unwrap();
+    assert_eq!(value, json!({"n": 3}));
+    let leftovers = fs::read_dir(dir.path())
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().contains("warp-tmp"))
+        .count();
+    assert_eq!(leftovers, 0);
+}
+
+#[test]
+fn backups_keep_only_the_most_recent_per_file() {
+    let dir = TempDir::new().unwrap();
+    let backups = dir.path().join("backups");
+    let target = dir.path().join("settings.json");
+    let other = dir.path().join("settings.json.bak");
+    fs::write(&other, "other").unwrap();
+    backup(&backups, &other).unwrap();
+    for index in 0..(MAX_BACKUPS_PER_FILE + 5) {
+        fs::write(&target, format!("v{index}")).unwrap();
+        backup(&backups, &target).unwrap();
+    }
+    let key = sanitized_backup_key(&target);
+    let mut kept: Vec<String> = fs::read_dir(&backups)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| {
+            name.split_once('_')
+                .is_some_and(|(_, rest)| rest.starts_with(&key))
+        })
+        .collect();
+    kept.sort();
+    // The other file's single backup is not part of this file's group.
+    assert_eq!(kept.len(), MAX_BACKUPS_PER_FILE + 1);
+    let contents: Vec<String> = kept
+        .iter()
+        .filter(|name| !name.contains(".bak"))
+        .map(|name| fs::read_to_string(backups.join(name)).unwrap())
+        .collect();
+    assert_eq!(contents.len(), MAX_BACKUPS_PER_FILE);
+    assert!(!contents.contains(&"v0".to_owned()));
+    assert!(contents.contains(&format!("v{}", MAX_BACKUPS_PER_FILE + 4)));
+}

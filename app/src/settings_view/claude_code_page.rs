@@ -22,10 +22,10 @@ use warpui::ui_components::components::{Coords, UiComponent, UiComponentStyles};
 use warpui::{AppContext, Entity, SingletonEntity, TypedActionView, View, ViewContext, ViewHandle};
 
 use super::claude_code::edits::{
-    ClaudeEdit, CommonSettingsUpdate, HookLocation, HookSpec, apply_edit, build_mcp_entry,
-    plugin_toggle_scope,
+    ClaudeEdit, CommonSettingsUpdate, HookLocation, HookSpec, ListDiff, apply_edit,
+    build_mcp_entry, mcp_form_transport, plugin_toggle_scope,
 };
-use super::claude_code::masking::{MASK, masked_kv_text, merge_masked_kv};
+use super::claude_code::masking::{MASK, mask_args, mask_url, masked_kv_text, merge_masked_kv};
 use super::claude_code::paths::ClaudePaths;
 use super::claude_code::snapshot::{
     ClaudeSnapshot, HookItem, HookSource, McpScope, McpState, MdItem, MdKind, load_snapshot,
@@ -51,6 +51,10 @@ const TITLE_FONT_SIZE: f32 = 13.;
 const ROW_SPACING: f32 = 10.;
 const BODY_EDITOR_MIN_HEIGHT: f32 = 120.;
 const BODY_EDITOR_MAX_HEIGHT: f32 = 360.;
+const KEY_ORDER_NOTE: &str = "Al guardar, las claves JSON se ordenan alfabéticamente (los valores \
+                              no cambian).";
+const DEFAULT_MODE_PLACEHOLDER: &str =
+    "default, acceptEdits, plan, dontAsk, bypassPermissions, auto";
 const HOOK_EVENTS_HINT: &str = "PreToolUse, PostToolUse, UserPromptSubmit, Notification, Stop, \
                                 SubagentStop, PreCompact, SessionStart, SessionEnd";
 
@@ -61,7 +65,7 @@ pub enum ClaudeCodePageAction {
     CopyPath(PathBuf),
     NewItem { kind: MdKind, project: bool },
     EditItem { kind: MdKind, index: usize },
-    ToggleSkill(usize),
+    SetSkillEnabled { index: usize, enabled: bool },
     NewMcp(NewMcpScope),
     EditMcp(usize),
     ToggleMcp(usize),
@@ -125,8 +129,20 @@ enum FormKind {
     },
     Settings {
         scope: SettingsScope,
+        initial: SettingsFormInitial,
         original_env: Option<Map<String, Value>>,
     },
+}
+
+/// The values the settings form was opened with, so saving writes only what the user changed.
+struct SettingsFormInitial {
+    model: String,
+    default_mode: String,
+    output_style: String,
+    status_line: String,
+    allow: Vec<String>,
+    ask: Vec<String>,
+    deny: Vec<String>,
 }
 
 impl FormKind {
@@ -233,6 +249,9 @@ pub struct ClaudeCodePageView {
     show_reload_hint: bool,
     form: Option<ActiveForm>,
     pending_delete: Option<DeleteTarget>,
+    /// Bumped by every reload and edit; a background load that finishes with an older value is
+    /// discarded so it cannot overwrite a newer snapshot.
+    generation: u64,
     /// Button mouse states keyed by a stable per-button id, so rows created from the snapshot
     /// keep their hover/click state across renders.
     mouse_states: RefCell<HashMap<String, MouseStateHandle>>,
@@ -282,6 +301,7 @@ impl ClaudeCodePageView {
             show_reload_hint: false,
             form: None,
             pending_delete: None,
+            generation: 0,
             mouse_states: Default::default(),
             reload_mouse_state: Default::default(),
         }
@@ -296,17 +316,25 @@ impl ClaudeCodePageView {
     }
 
     fn reload(&mut self, ctx: &mut ViewContext<Self>) {
-        if self.loading {
+        // A running edit delivers a snapshot read after its write, which is fresher than
+        // anything a load started now could guarantee.
+        if self.loading || self.busy {
             return;
         }
         self.loading = true;
+        self.generation += 1;
+        let generation = self.generation;
         let cwd = ActiveSession::as_ref(ctx)
             .path_if_local(ctx.window_id())
             .map(Path::to_path_buf);
         ctx.spawn(
             async move { ClaudePaths::from_env(cwd).map(|paths| load_snapshot(&paths)) },
-            |me, snapshot, ctx| {
+            move |me, snapshot, ctx| {
                 me.loading = false;
+                if generation != me.generation {
+                    ctx.notify();
+                    return;
+                }
                 match snapshot {
                     Some(snapshot) => me.snapshot = Some(snapshot),
                     None => {
@@ -334,6 +362,8 @@ impl ClaudeCodePageView {
             return;
         }
         self.busy = true;
+        self.generation += 1;
+        let generation = self.generation;
         let needs_reload = edit.needs_claude_reload();
         ctx.spawn(
             async move {
@@ -342,7 +372,9 @@ impl ClaudeCodePageView {
             },
             move |me, (result, snapshot), ctx| {
                 me.busy = false;
-                me.snapshot = Some(snapshot);
+                if generation == me.generation {
+                    me.snapshot = Some(snapshot);
+                }
                 me.pending_delete = None;
                 match result {
                     Ok(message) => {
@@ -552,22 +584,25 @@ impl ClaudeCodePageView {
                 .unwrap_or_default()
                 .to_owned()
         };
-        let transport = match entry.get("type").and_then(Value::as_str) {
-            Some("http") | Some("streamable-http") => "http",
-            Some("sse") => "sse",
-            _ if entry.contains_key("url") && !entry.contains_key("command") => "http",
-            _ => "stdio",
+        let Some(transport) = mcp_form_transport(&entry) else {
+            self.status = Some(Status::Error(
+                "Este tipo de servidor MCP no se puede editar aquí; usa \"Abrir archivo\""
+                    .to_owned(),
+            ));
+            ctx.notify();
+            return;
         };
-        let args = entry
+        let args: Vec<String> = entry
             .get("args")
             .and_then(Value::as_array)
             .map(|args| {
                 args.iter()
                     .filter_map(Value::as_str)
-                    .collect::<Vec<_>>()
-                    .join("\n")
+                    .map(str::to_owned)
+                    .collect()
             })
             .unwrap_or_default();
+        let args = mask_args(&args).join("\n");
         let specs = vec![
             FieldSpec::line(
                 "name",
@@ -579,7 +614,7 @@ impl ClaudeCodePageView {
                 .for_transports(&["stdio"]),
             FieldSpec::multiline(
                 "args",
-                "Argumentos (uno por línea)",
+                "Argumentos (uno por línea; •••••• conserva el valor guardado)",
                 args,
                 "-y\n@paquete/servidor",
             )
@@ -591,8 +626,13 @@ impl ClaudeCodePageView {
                 "API_KEY=…",
             )
             .for_transports(&["stdio"]),
-            FieldSpec::line("url", "URL", str_field("url"), "https://…")
-                .for_transports(&["http", "sse"]),
+            FieldSpec::line(
+                "url",
+                "URL (•••••• conserva las credenciales guardadas)",
+                mask_url(&str_field("url")),
+                "https://…",
+            )
+            .for_transports(&["http", "sse"]),
             FieldSpec::multiline(
                 "headers",
                 "Cabeceras (CLAVE=VALOR por línea; •••••• conserva el valor guardado)",
@@ -636,7 +676,7 @@ impl ClaudeCodePageView {
         let str_at =
             |value: Option<&Value>| value.and_then(Value::as_str).unwrap_or_default().to_owned();
         let permissions = settings.get("permissions");
-        let rules = |kind: &str| {
+        let rules = |kind: &str| -> Vec<String> {
             permissions
                 .and_then(|permissions| permissions.get(kind))
                 .and_then(Value::as_array)
@@ -644,53 +684,72 @@ impl ClaudeCodePageView {
                     rules
                         .iter()
                         .filter_map(Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join("\n")
+                        .map(|rule| rule.trim().to_owned())
+                        .filter(|rule| !rule.is_empty())
+                        .collect()
                 })
                 .unwrap_or_default()
+        };
+        let initial = SettingsFormInitial {
+            model: str_at(settings.get("model")),
+            default_mode: str_at(permissions.and_then(|p| p.get("defaultMode"))),
+            output_style: str_at(settings.get("outputStyle")),
+            status_line: str_at(settings.get("statusLine").and_then(|s| s.get("command"))),
+            allow: rules("allow"),
+            ask: rules("ask"),
+            deny: rules("deny"),
+        };
+        let default_mode_label = match scope {
+            SettingsScope::Project | SettingsScope::Local => {
+                "Modo de permisos (permissions.defaultMode; bypassPermissions y auto no tienen \
+                 efecto desde archivos de proyecto o local)"
+            }
+            SettingsScope::User | SettingsScope::Managed => {
+                "Modo de permisos (permissions.defaultMode)"
+            }
         };
         let original_env = settings.get("env").and_then(Value::as_object).cloned();
         let specs = vec![
             FieldSpec::line(
                 "model",
                 "Modelo (model)",
-                str_at(settings.get("model")),
+                initial.model.clone(),
                 "opus, sonnet…",
             ),
             FieldSpec::line(
                 "defaultMode",
-                "Modo de permisos (permissions.defaultMode)",
-                str_at(permissions.and_then(|p| p.get("defaultMode"))),
-                "default, acceptEdits, plan, bypassPermissions",
+                default_mode_label,
+                initial.default_mode.clone(),
+                DEFAULT_MODE_PLACEHOLDER,
             ),
             FieldSpec::line(
                 "outputStyle",
                 "Estilo de salida (outputStyle)",
-                str_at(settings.get("outputStyle")),
+                initial.output_style.clone(),
                 "default, Explanatory, Learning…",
             ),
             FieldSpec::line(
                 "statusLine",
                 "Comando de statusLine",
-                str_at(settings.get("statusLine").and_then(|s| s.get("command"))),
+                initial.status_line.clone(),
                 "~/.claude/statusline.sh",
             ),
             FieldSpec::multiline(
                 "allow",
                 "Permitir (una regla por línea)",
-                rules("allow"),
+                initial.allow.join("\n"),
                 "Bash(git status:*)",
             ),
             FieldSpec::multiline(
                 "ask",
                 "Preguntar (una regla por línea)",
-                rules("ask"),
+                initial.ask.join("\n"),
                 "Bash(git push:*)",
             ),
             FieldSpec::multiline(
                 "deny",
                 "Denegar (una regla por línea)",
-                rules("deny"),
+                initial.deny.join("\n"),
                 "Read(./.env)",
             ),
             FieldSpec::multiline(
@@ -703,6 +762,7 @@ impl ClaudeCodePageView {
         self.open_form(
             FormKind::Settings {
                 scope,
+                initial,
                 original_env,
             },
             format!("Editar configuración: {}", scope.label()),
@@ -822,20 +882,42 @@ impl ClaudeCodePageView {
             }
             FormKind::Settings {
                 scope,
+                initial,
                 original_env,
-            } => Ok(ClaudeEdit::SetCommonSettings {
-                scope: *scope,
-                update: CommonSettingsUpdate {
-                    model: text("model"),
-                    default_mode: text("defaultMode"),
-                    output_style: text("outputStyle"),
-                    status_line_command: text("statusLine"),
-                    allow: lines("allow"),
-                    deny: lines("deny"),
-                    ask: lines("ask"),
-                    env: merge_masked_kv(original_env.as_ref(), &text("env"))?,
-                },
-            }),
+            } => {
+                let changed = |key: &str, before: &str| {
+                    let value = text(key).trim().to_owned();
+                    (value != before.trim()).then_some(value)
+                };
+                let edited_env = merge_masked_kv(original_env.as_ref(), &text("env"))?;
+                let env_set = edited_env
+                    .iter()
+                    .filter(|(key, value)| {
+                        original_env.as_ref().and_then(|env| env.get(*key)) != Some(*value)
+                    })
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect();
+                let env_remove = original_env
+                    .iter()
+                    .flat_map(|env| env.keys())
+                    .filter(|key| !edited_env.contains_key(*key))
+                    .cloned()
+                    .collect();
+                Ok(ClaudeEdit::SetCommonSettings {
+                    scope: *scope,
+                    update: CommonSettingsUpdate {
+                        model: changed("model", &initial.model),
+                        default_mode: changed("defaultMode", &initial.default_mode),
+                        output_style: changed("outputStyle", &initial.output_style),
+                        status_line_command: changed("statusLine", &initial.status_line),
+                        allow: ListDiff::between(&initial.allow, &lines("allow")),
+                        deny: ListDiff::between(&initial.deny, &lines("deny")),
+                        ask: ListDiff::between(&initial.ask, &lines("ask")),
+                        env_set,
+                        env_remove,
+                    },
+                })
+            }
         }
     }
 
@@ -1169,17 +1251,40 @@ impl ClaudeCodePageView {
                     if kind == MdKind::Skill
                         && (item.origin == ItemOrigin::User || snapshot.paths.project.is_some())
                     {
-                        buttons.push(self.button(
-                            appearance,
-                            format!("{key}:toggle"),
-                            if item.is_disabled() {
-                                "Activar"
-                            } else {
-                                "Desactivar"
-                            },
-                            ClaudeCodePageAction::ToggleSkill(index),
-                            ButtonVariant::Secondary,
-                        ));
+                        // Partial overrides (`name-only`, `user-invocable-only`…) get explicit
+                        // labels so neither button silently replaces them.
+                        let (enable_label, disable_label) = match item.override_state.as_deref() {
+                            None => (None, Some("Desactivar".to_owned())),
+                            Some("off") => (Some("Activar".to_owned()), None),
+                            Some(state) => (
+                                Some(format!("Activar (quita \"{state}\")")),
+                                Some(format!("Desactivar (reemplaza \"{state}\")")),
+                            ),
+                        };
+                        if let Some(label) = enable_label {
+                            buttons.push(self.button(
+                                appearance,
+                                format!("{key}:enable"),
+                                &label,
+                                ClaudeCodePageAction::SetSkillEnabled {
+                                    index,
+                                    enabled: true,
+                                },
+                                ButtonVariant::Secondary,
+                            ));
+                        }
+                        if let Some(label) = disable_label {
+                            buttons.push(self.button(
+                                appearance,
+                                format!("{key}:disable"),
+                                &label,
+                                ClaudeCodePageAction::SetSkillEnabled {
+                                    index,
+                                    enabled: false,
+                                },
+                                ButtonVariant::Secondary,
+                            ));
+                        }
                     }
                     buttons.extend(self.delete_buttons(
                         appearance,
@@ -1259,9 +1364,9 @@ fn small_text(
 }
 
 /// Shortens paths under the home directory to `~/…` for display.
-fn display_path(path: &Path) -> String {
-    if let Some(home) = dirs::home_dir()
-        && let Ok(relative) = path.strip_prefix(&home)
+fn display_path(path: &Path, home: Option<&Path>) -> String {
+    if let Some(home) = home
+        && let Ok(relative) = path.strip_prefix(home)
     {
         return format!("~/{}", relative.display());
     }
@@ -1382,7 +1487,7 @@ impl TypedActionView for ClaudeCodePageView {
                     self.open_item_form(*kind, project, Some(&item), ctx);
                 }
             }
-            ClaudeCodePageAction::ToggleSkill(index) => {
+            ClaudeCodePageAction::SetSkillEnabled { index, enabled } => {
                 let Some(snapshot) = &self.snapshot else {
                     return;
                 };
@@ -1391,15 +1496,15 @@ impl TypedActionView for ClaudeCodePageView {
                 };
                 // Mirrors Claude Code's `/skills` menu, which writes project skill states to the
                 // gitignored local settings file.
-                let scope = match skill.origin {
+                let default_scope = match skill.origin {
                     ItemOrigin::User => SettingsScope::User,
                     ItemOrigin::Project => SettingsScope::Local,
                     ItemOrigin::Plugin(_) => return,
                 };
                 let edit = ClaudeEdit::SetSkillOverride {
-                    scope,
                     name: skill.name.clone(),
-                    off: !skill.is_disabled(),
+                    off: !*enabled,
+                    default_scope,
                 };
                 self.run_edit(edit, ctx);
             }
@@ -1640,13 +1745,17 @@ impl SettingsWidget for OverviewWidget {
         match &view.snapshot {
             Some(snapshot) => {
                 let paths = &snapshot.paths;
+                let home = snapshot.home_dir.as_deref();
                 column.add_child(small_text(
                     appearance,
-                    &format!("Carpeta de usuario: {}", display_path(&paths.config_dir)),
+                    &format!(
+                        "Carpeta de usuario: {}",
+                        display_path(&paths.config_dir, home)
+                    ),
                     sub_color(appearance),
                 ));
                 let project = match &paths.project {
-                    Some(project) => format!("Proyecto: {}", display_path(&project.root)),
+                    Some(project) => format!("Proyecto: {}", display_path(&project.root, home)),
                     None => "Proyecto: ninguno (enfoca una pestaña de terminal dentro de un \
                              proyecto y pulsa Recargar)"
                         .to_owned(),
@@ -1656,14 +1765,19 @@ impl SettingsWidget for OverviewWidget {
                     appearance,
                     &format!(
                         "Cada cambio guarda antes una copia en {}",
-                        display_path(&paths.backups_dir())
+                        display_path(&paths.backups_dir(), home)
                     ),
+                    sub_color(appearance),
+                ));
+                column.add_child(small_text(
+                    appearance,
+                    KEY_ORDER_NOTE,
                     sub_color(appearance),
                 ));
                 if let Some(error) = &snapshot.claude_json_error {
                     column.add_child(small_text(
                         appearance,
-                        &format!("{}: {error}", display_path(&paths.claude_json)),
+                        &format!("{}: {error}", display_path(&paths.claude_json, home)),
                         theme.ui_error_color(),
                     ));
                 }
@@ -1862,13 +1976,15 @@ impl SettingsWidget for McpWidget {
                 }
                 let mut buttons = Vec::new();
                 if !server.scope.is_read_only() {
-                    buttons.push(view.button(
-                        appearance,
-                        format!("{key}:edit"),
-                        "Editar",
-                        ClaudeCodePageAction::EditMcp(index),
-                        ButtonVariant::Secondary,
-                    ));
+                    if mcp_form_transport(&server.raw).is_some() {
+                        buttons.push(view.button(
+                            appearance,
+                            format!("{key}:edit"),
+                            "Editar",
+                            ClaudeCodePageAction::EditMcp(index),
+                            ButtonVariant::Secondary,
+                        ));
+                    }
                     let can_toggle = match server.scope {
                         McpScope::Project | McpScope::User | McpScope::Local(_) => {
                             snapshot.paths.project.is_some()
@@ -1947,7 +2063,7 @@ impl SettingsWidget for PluginsWidget {
                 badges.push(match (plugin.enabled, plugin.enabled_source) {
                     (Some(true), Some(source)) => format!("activado ({})", source.label()),
                     (Some(false), Some(source)) => format!("desactivado ({})", source.label()),
-                    _ => "no activado".to_owned(),
+                    (Some(_), None) | (None, Some(_)) | (None, None) => "no activado".to_owned(),
                 });
                 let target = plugin_toggle_scope(&snapshot.paths, &plugin.mentioned_in);
                 let mut buttons = vec![view.button(
@@ -2130,7 +2246,11 @@ impl SettingsWidget for SettingsFilesWidget {
                 }
                 rows.push(render_row(
                     appearance,
-                    &format!("{} — {}", file.scope.label(), display_path(&file.path)),
+                    &format!(
+                        "{} — {}",
+                        file.scope.label(),
+                        display_path(&file.path, snapshot.home_dir.as_deref())
+                    ),
                     &badges,
                     None,
                     file.error.as_deref(),
@@ -2222,7 +2342,11 @@ impl SettingsWidget for MemoryWidget {
                 let key = format!("memory:{index}");
                 rows.push(render_row(
                     appearance,
-                    &format!("{} — {}", file.label, display_path(&file.path)),
+                    &format!(
+                        "{} — {}",
+                        file.label,
+                        display_path(&file.path, snapshot.home_dir.as_deref())
+                    ),
                     &[if file.exists { "existe" } else { "no existe" }.to_owned()],
                     None,
                     None,

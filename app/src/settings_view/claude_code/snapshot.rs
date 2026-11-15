@@ -2,6 +2,7 @@
 //! fails as a whole: unreadable or invalid files are reported per item.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -9,21 +10,41 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value};
 
 use super::frontmatter::{MarkdownDoc, parse_markdown};
+use super::masking::{mask_args, mask_url};
 use super::paths::ClaudePaths;
 use super::{ItemOrigin, SettingsScope};
 
 /// Directory names more than this deep below a commands/agents root are not scanned.
-const MAX_SCAN_DEPTH: usize = 4;
+pub const MAX_SCAN_DEPTH: usize = 4;
 /// Files larger than this are not parsed (they are still listed).
 const MAX_MARKDOWN_BYTES: u64 = 512 * 1024;
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct SettingsFileInfo {
     pub scope: SettingsScope,
     pub path: PathBuf,
     pub exists: bool,
+    /// The parsed file. May hold secrets (`env`, `apiKeyHelper`…).
     pub value: Option<Map<String, Value>>,
     pub error: Option<String>,
+}
+
+impl fmt::Debug for SettingsFileInfo {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SettingsFileInfo")
+            .field("scope", &self.scope)
+            .field("path", &self.path)
+            .field("exists", &self.exists)
+            .field(
+                "value_keys",
+                &self
+                    .value
+                    .as_ref()
+                    .map(|value| value.keys().collect::<Vec<_>>()),
+            )
+            .field("error", &self.error)
+            .finish()
+    }
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -80,10 +101,6 @@ impl MdItem {
             MdKind::Agent | MdKind::Command => self.path.clone(),
         }
     }
-
-    pub fn is_disabled(&self) -> bool {
-        self.override_state.as_deref() == Some("off")
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -123,7 +140,7 @@ pub enum McpState {
     PendingApproval,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct McpServer {
     pub name: String,
     pub scope: McpScope,
@@ -141,21 +158,29 @@ pub struct McpServer {
 }
 
 impl McpServer {
+    /// The URL or command line, with likely secrets masked.
     pub fn summary(&self) -> String {
         match (&self.url, &self.command) {
-            (Some(url), _) => url.clone(),
+            (Some(url), _) => mask_url(url),
             (None, Some(command)) if self.args.is_empty() => command.clone(),
-            (None, Some(command)) => format!("{command} {}", self.args.join(" ")),
+            (None, Some(command)) => format!("{command} {}", mask_args(&self.args).join(" ")),
             (None, None) => String::new(),
         }
     }
+}
 
-    pub fn env(&self) -> Option<&Map<String, Value>> {
-        self.raw.get("env").and_then(Value::as_object)
-    }
-
-    pub fn headers(&self) -> Option<&Map<String, Value>> {
-        self.raw.get("headers").and_then(Value::as_object)
+impl fmt::Debug for McpServer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("McpServer")
+            .field("name", &self.name)
+            .field("scope", &self.scope)
+            .field("path", &self.path)
+            .field("transport", &self.transport)
+            .field("summary", &self.summary())
+            .field("env_keys", &self.env_keys)
+            .field("header_keys", &self.header_keys)
+            .field("state", &self.state)
+            .finish_non_exhaustive()
     }
 }
 
@@ -235,6 +260,8 @@ pub struct MemoryFile {
 #[derive(Clone, Debug)]
 pub struct ClaudeSnapshot {
     pub paths: ClaudePaths,
+    /// Cached so rendering can shorten paths to `~/…` without querying the environment.
+    pub home_dir: Option<PathBuf>,
     pub settings: Vec<SettingsFileInfo>,
     pub claude_json_error: Option<String>,
     /// The key under `projects` in `.claude.json` that holds the current project, if any.
@@ -396,6 +423,7 @@ pub fn load_snapshot(paths: &ClaudePaths) -> ClaudeSnapshot {
         attributions: attributions(&settings_in_order),
         permission_rules: permission_rules(&settings_in_order),
         paths: paths.clone(),
+        home_dir: dirs::home_dir(),
         settings,
         claude_json_error,
         claude_json_project_key: project_entry.as_ref().map(|(key, _)| key.clone()),

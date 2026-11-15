@@ -97,7 +97,7 @@ fn skills_from_user_project_and_plugins() {
     let deploy = &snapshot.skills[1];
     assert_eq!(deploy.origin, ItemOrigin::User);
     assert_eq!(deploy.description().as_deref(), Some("Ship it"));
-    assert!(deploy.is_disabled());
+    assert_eq!(deploy.override_state.as_deref(), Some("off"));
     assert_eq!(deploy.removal_path(), config.join("skills/deploy"));
 
     assert!(snapshot.skills[0].error.is_some());
@@ -195,6 +195,40 @@ fn mcp_servers_from_every_scope_with_state() {
     assert_eq!(find("rejected").state, McpState::Disabled);
     assert_eq!(find("pending").state, McpState::PendingApproval);
     assert_eq!(find("pending").transport, "sse");
+}
+
+#[test]
+fn mcp_summary_and_debug_hide_secrets() {
+    let fx = fixture();
+    write_json(
+        &fx.paths.claude_json,
+        json!({"mcpServers": {
+            "remote": {"type": "http", "url": "https://me:hunter2@api.example/mcp?apikey=s3cr3t&v=1"},
+            "local": {"command": "srv", "args": ["--token", "tok123", "--verbose"], "env": {"K": "envsecret"}}
+        }}),
+    );
+    write_json(
+        &fx.paths.config_dir.join("settings.json"),
+        json!({"env": {"ANTHROPIC_API_KEY": "settingsecret"}}),
+    );
+    let snapshot = load_snapshot(&fx.paths);
+    let find = |name: &str| {
+        snapshot
+            .mcp_servers
+            .iter()
+            .find(|server| server.name == name)
+            .unwrap()
+    };
+    assert_eq!(
+        find("remote").summary(),
+        "https://••••••@api.example/mcp?apikey=••••••&v=••••••"
+    );
+    assert_eq!(find("local").summary(), "srv --token •••••• --verbose");
+
+    let debug = format!("{snapshot:?}");
+    for secret in ["hunter2", "s3cr3t", "tok123", "envsecret", "settingsecret"] {
+        assert!(!debug.contains(secret), "{secret} leaked into Debug output");
+    }
 }
 
 #[test]

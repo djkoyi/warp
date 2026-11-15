@@ -2,18 +2,24 @@
 //! before writing, changes only the subtree it owns, backs the file up first and writes it
 //! atomically (see [`super::safe_write`]).
 
+use std::fmt;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use serde_json::{Map, Value};
 
 use super::frontmatter::{MarkdownDoc, parse_markdown, render_markdown};
+use super::masking::{merge_masked_args, merge_masked_url};
 use super::paths::ClaudePaths;
 use super::safe_write::{
     backup_and_remove, object_entry, read_json_object, update_json_file, write_with_backup,
 };
-use super::snapshot::{McpScope, MdKind};
+use super::snapshot::{MAX_SCAN_DEPTH, McpScope, MdKind};
 use super::{SettingsScope, validate_name};
+
+/// Deepest agent/command file accepted, in path components below its root: the folders the
+/// snapshot scans plus the file itself.
+const MAX_ITEM_DEPTH: usize = MAX_SCAN_DEPTH + 1;
 
 /// Identifies a hook inside a settings file, plus the command it had when it was read so a
 /// concurrent change to the file is detected instead of editing the wrong entry.
@@ -33,20 +39,93 @@ pub struct HookSpec {
     pub timeout: Option<u64>,
 }
 
-/// The settings keys the panel edits visually. Blank values remove the key.
+/// Rules to add to and remove from one permission list. Applied onto the list as it is on disk
+/// at write time, so rules Claude Code added after the form was opened survive.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct CommonSettingsUpdate {
-    pub model: String,
-    pub default_mode: String,
-    pub output_style: String,
-    pub status_line_command: String,
-    pub allow: Vec<String>,
-    pub deny: Vec<String>,
-    pub ask: Vec<String>,
-    pub env: Map<String, Value>,
+pub struct ListDiff {
+    pub add: Vec<String>,
+    pub remove: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
+impl ListDiff {
+    pub fn between(initial: &[String], edited: &[String]) -> Self {
+        Self {
+            add: edited
+                .iter()
+                .filter(|rule| !initial.contains(rule))
+                .cloned()
+                .collect(),
+            remove: initial
+                .iter()
+                .filter(|rule| !edited.contains(rule))
+                .cloned()
+                .collect(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.add.is_empty() && self.remove.is_empty()
+    }
+}
+
+/// The changes the "common settings" form makes. Only what the user changed is written; every
+/// other key keeps whatever value the file has at write time.
+#[derive(Clone, Default, PartialEq)]
+pub struct CommonSettingsUpdate {
+    /// `None` leaves the key untouched; a blank value removes it.
+    pub model: Option<String>,
+    /// `None` leaves the key untouched; a blank value removes it.
+    pub default_mode: Option<String>,
+    /// `None` leaves the key untouched; a blank value removes it.
+    pub output_style: Option<String>,
+    /// `None` leaves the key untouched; a blank value removes it.
+    pub status_line_command: Option<String>,
+    pub allow: ListDiff,
+    pub deny: ListDiff,
+    pub ask: ListDiff,
+    /// New or changed `env` entries. Holds secrets.
+    pub env_set: Map<String, Value>,
+    pub env_remove: Vec<String>,
+}
+
+impl CommonSettingsUpdate {
+    pub fn is_empty(&self) -> bool {
+        self.model.is_none()
+            && self.default_mode.is_none()
+            && self.output_style.is_none()
+            && self.status_line_command.is_none()
+            && self.allow.is_empty()
+            && self.deny.is_empty()
+            && self.ask.is_empty()
+            && self.env_set.is_empty()
+            && self.env_remove.is_empty()
+    }
+
+    fn touches_permissions(&self) -> bool {
+        self.default_mode.is_some()
+            || !self.allow.is_empty()
+            || !self.deny.is_empty()
+            || !self.ask.is_empty()
+    }
+}
+
+impl fmt::Debug for CommonSettingsUpdate {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CommonSettingsUpdate")
+            .field("model", &self.model)
+            .field("default_mode", &self.default_mode)
+            .field("output_style", &self.output_style)
+            .field("status_line_command", &self.status_line_command)
+            .field("allow", &self.allow)
+            .field("deny", &self.deny)
+            .field("ask", &self.ask)
+            .field("env_set_keys", &self.env_set.keys().collect::<Vec<_>>())
+            .field("env_remove", &self.env_remove)
+            .finish()
+    }
+}
+
+#[derive(Clone)]
 pub enum ClaudeEdit {
     /// Creates (when `original_path` is `None`) or updates a skill, subagent or command file.
     SaveMarkdown {
@@ -88,10 +167,13 @@ pub enum ClaudeEdit {
         id: String,
         enabled: bool,
     },
+    /// Turning a skill off writes `"off"` to the highest-precedence writable settings file that
+    /// already has an override for it, else to `default_scope`. Turning it on removes the
+    /// override from every writable file.
     SetSkillOverride {
-        scope: SettingsScope,
         name: String,
         off: bool,
+        default_scope: SettingsScope,
     },
     UpsertHook {
         scope: SettingsScope,
@@ -106,6 +188,97 @@ pub enum ClaudeEdit {
         scope: SettingsScope,
         update: CommonSettingsUpdate,
     },
+}
+
+/// Secret-bearing payloads (MCP entries, env values, markdown bodies) are left out.
+impl fmt::Debug for ClaudeEdit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ClaudeEdit::SaveMarkdown {
+                kind,
+                project,
+                original_path,
+                name,
+                ..
+            } => f
+                .debug_struct("SaveMarkdown")
+                .field("kind", kind)
+                .field("project", project)
+                .field("original_path", original_path)
+                .field("name", name)
+                .finish_non_exhaustive(),
+            ClaudeEdit::DeleteItem { path } => {
+                f.debug_struct("DeleteItem").field("path", path).finish()
+            }
+            ClaudeEdit::UpsertMcpServer {
+                scope,
+                original_name,
+                name,
+                ..
+            } => f
+                .debug_struct("UpsertMcpServer")
+                .field("scope", scope)
+                .field("original_name", original_name)
+                .field("name", name)
+                .finish_non_exhaustive(),
+            ClaudeEdit::DeleteMcpServer { scope, name } => f
+                .debug_struct("DeleteMcpServer")
+                .field("scope", scope)
+                .field("name", name)
+                .finish(),
+            ClaudeEdit::SetMcpjsonServerEnabled { name, enabled } => f
+                .debug_struct("SetMcpjsonServerEnabled")
+                .field("name", name)
+                .field("enabled", enabled)
+                .finish(),
+            ClaudeEdit::SetMcpServerDisabled {
+                project_key,
+                name,
+                disabled,
+            } => f
+                .debug_struct("SetMcpServerDisabled")
+                .field("project_key", project_key)
+                .field("name", name)
+                .field("disabled", disabled)
+                .finish(),
+            ClaudeEdit::SetPluginEnabled { scope, id, enabled } => f
+                .debug_struct("SetPluginEnabled")
+                .field("scope", scope)
+                .field("id", id)
+                .field("enabled", enabled)
+                .finish(),
+            ClaudeEdit::SetSkillOverride {
+                name,
+                off,
+                default_scope,
+            } => f
+                .debug_struct("SetSkillOverride")
+                .field("name", name)
+                .field("off", off)
+                .field("default_scope", default_scope)
+                .finish(),
+            ClaudeEdit::UpsertHook {
+                scope,
+                original,
+                hook,
+            } => f
+                .debug_struct("UpsertHook")
+                .field("scope", scope)
+                .field("original", original)
+                .field("hook", hook)
+                .finish(),
+            ClaudeEdit::RemoveHook { scope, location } => f
+                .debug_struct("RemoveHook")
+                .field("scope", scope)
+                .field("location", location)
+                .finish(),
+            ClaudeEdit::SetCommonSettings { scope, update } => f
+                .debug_struct("SetCommonSettings")
+                .field("scope", scope)
+                .field("update", update)
+                .finish(),
+        }
+    }
 }
 
 impl ClaudeEdit {
@@ -143,7 +316,7 @@ pub fn apply_edit(paths: &ClaudePaths, edit: ClaudeEdit) -> Result<String, Strin
             body,
         } => save_markdown(paths, kind, project, original_path, &name, fields, body),
         ClaudeEdit::DeleteItem { path } => {
-            ensure_within_writable_roots(paths, &path)?;
+            ensure_within_writable_roots(paths, &path, PathPurpose::Delete)?;
             backup_and_remove(&backups, &path)
                 .map_err(|err| format!("No se pudo eliminar {}: {err}", path.display()))?;
             Ok(format!("Eliminado {}", path.display()))
@@ -166,7 +339,7 @@ pub fn apply_edit(paths: &ClaudePaths, edit: ClaudeEdit) -> Result<String, Strin
                 if let Some(original) = &original_name {
                     servers.remove(original);
                 }
-                servers.insert(name.clone(), Value::Object(entry));
+                servers.insert(name.clone(), Value::Object(entry.clone()));
                 Ok(())
             })?;
             Ok(format!("Servidor MCP \"{name}\" guardado"))
@@ -221,25 +394,11 @@ pub fn apply_edit(paths: &ClaudePaths, edit: ClaudeEdit) -> Result<String, Strin
                 scope.label()
             ))
         }
-        ClaudeEdit::SetSkillOverride { scope, name, off } => {
-            let file = writable_settings_path(paths, scope)?;
-            update_json_file(&backups, &file, |root| {
-                let overrides = object_entry(root, "skillOverrides")?;
-                if off {
-                    overrides.insert(name.clone(), Value::String("off".to_owned()));
-                } else {
-                    overrides.remove(&name);
-                    if overrides.is_empty() {
-                        root.remove("skillOverrides");
-                    }
-                }
-                Ok(())
-            })?;
-            Ok(format!(
-                "Skill \"{name}\" {}",
-                if off { "desactivada" } else { "activada" }
-            ))
-        }
+        ClaudeEdit::SetSkillOverride {
+            name,
+            off,
+            default_scope,
+        } => set_skill_override(paths, &name, off, default_scope),
         ClaudeEdit::UpsertHook {
             scope,
             original,
@@ -265,6 +424,9 @@ pub fn apply_edit(paths: &ClaudePaths, edit: ClaudeEdit) -> Result<String, Strin
             Ok(format!("Hook {} eliminado", location.event))
         }
         ClaudeEdit::SetCommonSettings { scope, update } => {
+            if update.is_empty() {
+                return Ok("Sin cambios".to_owned());
+            }
             validate_common_settings(&update)?;
             let file = writable_settings_path(paths, scope)?;
             update_json_file(&backups, &file, |root| apply_common_settings(root, &update))?;
@@ -284,7 +446,7 @@ fn save_markdown(
 ) -> Result<String, String> {
     let (path, mut doc) = match original_path {
         Some(path) => {
-            ensure_within_writable_roots(paths, &path)?;
+            ensure_within_writable_roots(paths, &path, PathPurpose::Edit)?;
             let text = fs::read_to_string(&path)
                 .map_err(|err| format!("No se pudo leer {}: {err}", path.display()))?;
             let doc = parse_markdown(&text).map_err(|err| {
@@ -334,44 +496,97 @@ fn save_markdown(
     Ok(format!("Guardado {}", path.display()))
 }
 
-/// Rejects paths outside the `skills`, `agents` and `commands` folders of the user config dir
-/// and the project's `.claude` dir, so a stale or crafted path can never make the panel write
-/// or delete anything else.
-fn ensure_within_writable_roots(paths: &ClaudePaths, path: &Path) -> Result<(), String> {
-    let roots: Vec<PathBuf> = std::iter::once(paths.config_dir.clone())
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum PathPurpose {
+    Edit,
+    Delete,
+}
+
+/// Rejects anything but the exact item shapes inside the `skills`, `agents` and `commands`
+/// folders of the user config dir and the project's `.claude` dir, so a stale or crafted path
+/// can never make the panel write or delete anything else:
+/// - skills: `<root>/<name>` (delete) or `<root>/<name>/SKILL.md` (edit);
+/// - agents and commands: a `.md` file under `<root>`, possibly in subfolders (namespaced
+///   commands such as `/frontend:review`).
+fn ensure_within_writable_roots(
+    paths: &ClaudePaths,
+    path: &Path,
+    purpose: PathPurpose,
+) -> Result<(), String> {
+    let outside = || {
+        format!(
+            "{} está fuera de las carpetas de Claude Code editables",
+            path.display()
+        )
+    };
+    if path.file_name().is_none()
+        || !path.components().all(|component| {
+            matches!(
+                component,
+                Component::Normal(_) | Component::RootDir | Component::Prefix(_)
+            )
+        })
+    {
+        return Err(outside());
+    }
+    let roots = std::iter::once(paths.config_dir.clone())
         .chain(paths.project_claude_dir())
         .flat_map(|base| {
-            [MdKind::Skill, MdKind::Agent, MdKind::Command].map(|kind| base.join(kind.subdir()))
-        })
-        .collect();
-    // Checked lexically first: skills installed by `npx skills` are symlinks into
-    // `~/.agents/skills`, and editing them through the link is intended.
-    let has_parent_dir = path
-        .components()
-        .any(|component| matches!(component, Component::ParentDir));
-    if !has_parent_dir
-        && roots
-            .iter()
-            .any(|root| path.starts_with(root) && path != root.as_path())
-    {
-        return Ok(());
-    }
-    let parent = path
-        .parent()
-        .ok_or_else(|| format!("Ruta no válida: {}", path.display()))?;
-    let parent = fs::canonicalize(parent)
-        .map_err(|err| format!("No se pudo resolver {}: {err}", path.display()))?;
-    for root in &roots {
-        if let Ok(root) = fs::canonicalize(root)
-            && parent.starts_with(&root)
-        {
+            [MdKind::Skill, MdKind::Agent, MdKind::Command]
+                .map(|kind| (kind, base.join(kind.subdir())))
+        });
+    for (kind, root) in roots {
+        let canonical_root = fs::canonicalize(&root).ok();
+        let Some(relative) = path.strip_prefix(&root).ok().or_else(|| {
+            canonical_root
+                .as_deref()
+                .and_then(|canonical| path.strip_prefix(canonical).ok())
+        }) else {
+            continue;
+        };
+        let parts: Vec<&std::ffi::OsStr> =
+            relative.components().map(Component::as_os_str).collect();
+        let shape_ok = match kind {
+            MdKind::Skill => match (purpose, parts.as_slice()) {
+                (PathPurpose::Delete, [_name]) => true,
+                (PathPurpose::Edit, [_name, file]) => *file == "SKILL.md",
+                (PathPurpose::Delete | PathPurpose::Edit, _) => false,
+            },
+            MdKind::Agent | MdKind::Command => {
+                !parts.is_empty()
+                    && parts.len() <= MAX_ITEM_DEPTH
+                    && Path::new(parts[parts.len() - 1])
+                        .extension()
+                        .is_some_and(|ext| ext == "md")
+            }
+        };
+        if !shape_ok {
+            return Err(outside());
+        }
+        // Skills installed by `npx skills` are symlinked directories pointing elsewhere: editing
+        // through the link is intended, and deleting removes only the link. Agents and commands
+        // have no such convention, so a symlinked subfolder or file must not lead outside.
+        let Some(canonical_root) = canonical_root else {
+            return Err(outside());
+        };
+        let parent = path.parent().ok_or_else(outside)?;
+        let check = match (kind, purpose) {
+            (MdKind::Skill, PathPurpose::Delete) => Some(parent.to_path_buf()),
+            (MdKind::Skill, PathPurpose::Edit) => parent.parent().map(Path::to_path_buf),
+            (MdKind::Agent | MdKind::Command, PathPurpose::Delete) => Some(parent.to_path_buf()),
+            (MdKind::Agent | MdKind::Command, PathPurpose::Edit) => Some(path.to_path_buf()),
+        };
+        let resolved = check
+            .map(fs::canonicalize)
+            .transpose()
+            .map_err(|err| format!("No se pudo resolver {}: {err}", path.display()))?
+            .ok_or_else(outside)?;
+        if resolved.starts_with(&canonical_root) {
             return Ok(());
         }
+        return Err(outside());
     }
-    Err(format!(
-        "{} está fuera de las carpetas de Claude Code editables",
-        path.display()
-    ))
+    Err(outside())
 }
 
 fn writable_settings_path(paths: &ClaudePaths, scope: SettingsScope) -> Result<PathBuf, String> {
@@ -407,8 +622,27 @@ fn mcp_servers_object<'a>(
     }
 }
 
+/// The form transport (`stdio`, `http` or `sse`) for an MCP entry, or `None` when its `type`
+/// is one the form cannot edit without losing information (e.g. `ws`).
+pub fn mcp_form_transport(entry: &Map<String, Value>) -> Option<&'static str> {
+    match entry.get("type") {
+        None if entry.contains_key("url") && !entry.contains_key("command") => Some("http"),
+        None => Some("stdio"),
+        Some(Value::String(kind)) => match kind.as_str() {
+            "stdio" => Some("stdio"),
+            "http" | "streamable-http" => Some("http"),
+            "sse" => Some("sse"),
+            _ => None,
+        },
+        Some(
+            Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_) | Value::Object(_),
+        ) => None,
+    }
+}
+
 /// Builds an MCP server entry from form values, starting from the original entry so keys the
-/// form does not know about (e.g. `oauth`, `timeout`) are kept.
+/// form does not know about (e.g. `oauth`, `timeout`) are kept. `args_text` and `url` may hold
+/// the masked values the form showed (see [`super::masking`]); those keep the stored secrets.
 pub fn build_mcp_entry(
     original: Option<&Map<String, Value>>,
     transport: &str,
@@ -418,21 +652,42 @@ pub fn build_mcp_entry(
     env: Map<String, Value>,
     headers: Map<String, Value>,
 ) -> Result<Map<String, Value>, String> {
+    let original_transport = match original {
+        Some(original) => Some(mcp_form_transport(original).ok_or_else(|| {
+            "Este tipo de servidor MCP no se puede editar aquí; usa \"Abrir archivo\"".to_owned()
+        })?),
+        None => None,
+    };
     let mut entry = original.cloned().unwrap_or_default();
     let transport = transport.trim();
+    // An unchanged transport keeps the stored `type` verbatim (absent, or e.g.
+    // `streamable-http`), so saving does not rewrite what the user did not touch.
+    let set_type = |entry: &mut Map<String, Value>| {
+        if original_transport != Some(transport) {
+            entry.insert("type".to_owned(), Value::String(transport.to_owned()));
+        }
+    };
     match transport {
         "stdio" => {
             let command = command.trim();
             if command.is_empty() {
                 return Err("Un servidor stdio necesita un comando".to_owned());
             }
-            entry.insert("type".to_owned(), Value::String("stdio".to_owned()));
+            set_type(&mut entry);
             entry.insert("command".to_owned(), Value::String(command.to_owned()));
-            let args: Vec<Value> = args_text
-                .lines()
-                .map(str::trim)
-                .filter(|arg| !arg.is_empty())
-                .map(|arg| Value::String(arg.to_owned()))
+            let original_args = original
+                .and_then(|original| original.get("args"))
+                .and_then(Value::as_array)
+                .map(|args| {
+                    args.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            let args: Vec<Value> = merge_masked_args(&original_args, args_text)?
+                .into_iter()
+                .map(Value::String)
                 .collect();
             if args.is_empty() {
                 entry.remove("args");
@@ -444,12 +699,15 @@ pub fn build_mcp_entry(
             entry.remove("headers");
         }
         "http" | "sse" => {
-            let url = url.trim();
+            let original_url = original
+                .and_then(|original| original.get("url"))
+                .and_then(Value::as_str);
+            let url = merge_masked_url(original_url, url)?;
             if !(url.starts_with("https://") || url.starts_with("http://")) {
                 return Err("La URL debe empezar por https:// o http://".to_owned());
             }
-            entry.insert("type".to_owned(), Value::String(transport.to_owned()));
-            entry.insert("url".to_owned(), Value::String(url.to_owned()));
+            set_type(&mut entry);
+            entry.insert("url".to_owned(), Value::String(url));
             set_or_remove_object(&mut entry, "headers", headers);
             entry.remove("command");
             entry.remove("args");
@@ -573,8 +831,9 @@ fn locate_hook<'a>(
     Ok(hook)
 }
 
-fn remove_hook(hooks: &mut Map<String, Value>, location: &HookLocation) -> Result<(), String> {
-    locate_hook(hooks, location)?;
+/// Removes the hook at `location` and returns it, with every field it had.
+fn remove_hook(hooks: &mut Map<String, Value>, location: &HookLocation) -> Result<Value, String> {
+    let removed = locate_hook(hooks, location)?.take();
     let mut remove_event = false;
     if let Some(groups) = hooks.get_mut(&location.event).and_then(Value::as_array_mut) {
         let mut remove_group = false;
@@ -594,7 +853,7 @@ fn remove_hook(hooks: &mut Map<String, Value>, location: &HookLocation) -> Resul
     if remove_event {
         hooks.remove(&location.event);
     }
-    Ok(())
+    Ok(removed)
 }
 
 fn upsert_hook(
@@ -604,6 +863,7 @@ fn upsert_hook(
 ) -> Result<(), String> {
     let hooks = object_entry(root, "hooks")?;
     let matcher = normalized_matcher(spec.matcher.as_deref());
+    let mut hook = Map::new();
     if let Some(location) = original {
         let same_group = location.event == spec.event
             && hooks
@@ -616,19 +876,22 @@ fn upsert_hook(
             let Value::Object(hook) = hook else {
                 return Err("El hook no es un objeto JSON".to_owned());
             };
-            hook.entry("type".to_owned())
-                .or_insert_with(|| Value::String("command".to_owned()));
-            hook.insert("command".to_owned(), Value::String(spec.command.clone()));
-            set_timeout(hook, spec.timeout);
+            apply_hook_spec(hook, spec);
             return Ok(());
         }
-        remove_hook(hooks, location)?;
+        // Moving keeps the fields the form does not show (`if`, `async`, `statusMessage`…).
+        hook = match remove_hook(hooks, location)? {
+            Value::Object(hook) => hook,
+            Value::Null
+            | Value::Bool(_)
+            | Value::Number(_)
+            | Value::String(_)
+            | Value::Array(_) => {
+                return Err("El hook no es un objeto JSON".to_owned());
+            }
+        };
     }
-
-    let mut hook = Map::new();
-    hook.insert("type".to_owned(), Value::String("command".to_owned()));
-    hook.insert("command".to_owned(), Value::String(spec.command.clone()));
-    set_timeout(&mut hook, spec.timeout);
+    apply_hook_spec(&mut hook, spec);
 
     let groups = hooks
         .entry(spec.event.clone())
@@ -658,6 +921,13 @@ fn upsert_hook(
     Ok(())
 }
 
+fn apply_hook_spec(hook: &mut Map<String, Value>, spec: &HookSpec) {
+    hook.entry("type".to_owned())
+        .or_insert_with(|| Value::String("command".to_owned()));
+    hook.insert("command".to_owned(), Value::String(spec.command.clone()));
+    set_timeout(hook, spec.timeout);
+}
+
 fn set_timeout(hook: &mut Map<String, Value>, timeout: Option<u64>) {
     match timeout {
         Some(timeout) => {
@@ -670,11 +940,19 @@ fn set_timeout(hook: &mut Map<String, Value>, timeout: Option<u64>) {
 }
 
 fn validate_common_settings(update: &CommonSettingsUpdate) -> Result<(), String> {
-    let mode = update.default_mode.trim();
-    if !mode.is_empty() && !mode.chars().all(|c| c.is_ascii_alphabetic()) {
-        return Err(format!("defaultMode no válido: \"{mode}\""));
+    if let Some(mode) = &update.default_mode {
+        let mode = mode.trim();
+        if !mode.is_empty() && !mode.chars().all(|c| c.is_ascii_alphabetic()) {
+            return Err(format!("defaultMode no válido: \"{mode}\""));
+        }
     }
-    for rule in update.allow.iter().chain(&update.deny).chain(&update.ask) {
+    for rule in update
+        .allow
+        .add
+        .iter()
+        .chain(&update.deny.add)
+        .chain(&update.ask.add)
+    {
         if rule.trim().is_empty() {
             return Err("Las reglas de permisos no pueden estar vacías".to_owned());
         }
@@ -691,56 +969,149 @@ fn set_or_remove_string(map: &mut Map<String, Value>, key: &str, value: &str) {
     }
 }
 
-fn set_or_remove_list(map: &mut Map<String, Value>, key: &str, values: &[String]) {
-    if values.is_empty() {
-        map.remove(key);
-    } else {
-        map.insert(
-            key.to_owned(),
-            Value::Array(
-                values
-                    .iter()
-                    .map(|value| Value::String(value.trim().to_owned()))
-                    .collect(),
-            ),
-        );
+/// Applies `diff` to the list at `key`. Entries that are not strings are kept untouched.
+fn apply_list_diff(map: &mut Map<String, Value>, key: &str, diff: &ListDiff) -> Result<(), String> {
+    if diff.is_empty() {
+        return Ok(());
     }
+    for rule in &diff.remove {
+        list_remove(map, key, rule)?;
+    }
+    for rule in &diff.add {
+        list_insert(map, key, rule.trim())?;
+    }
+    if map
+        .get(key)
+        .and_then(Value::as_array)
+        .is_some_and(Vec::is_empty)
+    {
+        map.remove(key);
+    }
+    Ok(())
 }
 
 fn apply_common_settings(
     root: &mut Map<String, Value>,
     update: &CommonSettingsUpdate,
 ) -> Result<(), String> {
-    set_or_remove_string(root, "model", &update.model);
-    set_or_remove_string(root, "outputStyle", &update.output_style);
-
-    let permissions = object_entry(root, "permissions")?;
-    set_or_remove_string(permissions, "defaultMode", &update.default_mode);
-    set_or_remove_list(permissions, "allow", &update.allow);
-    set_or_remove_list(permissions, "deny", &update.deny);
-    set_or_remove_list(permissions, "ask", &update.ask);
-    if permissions.is_empty() {
-        root.remove("permissions");
+    if let Some(model) = &update.model {
+        set_or_remove_string(root, "model", model);
+    }
+    if let Some(output_style) = &update.output_style {
+        set_or_remove_string(root, "outputStyle", output_style);
     }
 
-    let command = update.status_line_command.trim();
-    if command.is_empty() {
-        root.remove("statusLine");
-    } else {
-        let status_line = root
-            .entry("statusLine".to_owned())
-            .or_insert_with(|| Value::Object(Map::new()));
-        if !status_line.is_object() {
-            *status_line = Value::Object(Map::new());
+    if update.touches_permissions() {
+        let permissions = object_entry(root, "permissions")?;
+        if let Some(mode) = &update.default_mode {
+            set_or_remove_string(permissions, "defaultMode", mode);
         }
-        if let Value::Object(status_line) = status_line {
-            status_line.insert("type".to_owned(), Value::String("command".to_owned()));
-            status_line.insert("command".to_owned(), Value::String(command.to_owned()));
+        apply_list_diff(permissions, "allow", &update.allow)?;
+        apply_list_diff(permissions, "deny", &update.deny)?;
+        apply_list_diff(permissions, "ask", &update.ask)?;
+        if permissions.is_empty() {
+            root.remove("permissions");
         }
     }
 
-    set_or_remove_object(root, "env", update.env.clone());
+    if let Some(command) = &update.status_line_command {
+        let command = command.trim();
+        if command.is_empty() {
+            root.remove("statusLine");
+        } else {
+            let status_line = root
+                .entry("statusLine".to_owned())
+                .or_insert_with(|| Value::Object(Map::new()));
+            if !status_line.is_object() {
+                *status_line = Value::Object(Map::new());
+            }
+            if let Value::Object(status_line) = status_line {
+                status_line.insert("type".to_owned(), Value::String("command".to_owned()));
+                status_line.insert("command".to_owned(), Value::String(command.to_owned()));
+            }
+        }
+    }
+
+    if !update.env_set.is_empty() || !update.env_remove.is_empty() {
+        let env = object_entry(root, "env")?;
+        for key in &update.env_remove {
+            env.remove(key);
+        }
+        for (key, value) in &update.env_set {
+            env.insert(key.clone(), value.clone());
+        }
+        if env.is_empty() {
+            root.remove("env");
+        }
+    }
     Ok(())
+}
+
+/// Writable settings scopes, highest precedence first.
+const WRITABLE_SCOPES_BY_PRECEDENCE: [SettingsScope; 3] = [
+    SettingsScope::Local,
+    SettingsScope::Project,
+    SettingsScope::User,
+];
+
+fn skill_override_in(root: &Map<String, Value>, name: &str) -> Option<Value> {
+    root.get("skillOverrides")
+        .and_then(Value::as_object)
+        .and_then(|overrides| overrides.get(name))
+        .cloned()
+}
+
+fn set_skill_override(
+    paths: &ClaudePaths,
+    name: &str,
+    off: bool,
+    default_scope: SettingsScope,
+) -> Result<String, String> {
+    let backups = paths.backups_dir();
+    let mut defining = Vec::new();
+    for scope in WRITABLE_SCOPES_BY_PRECEDENCE {
+        let Some(path) = paths.settings_path(scope) else {
+            continue;
+        };
+        if skill_override_in(&read_json_object(&path)?, name).is_some() {
+            defining.push((scope, path));
+        }
+    }
+    if off {
+        let path = match defining.into_iter().next() {
+            Some((_, path)) => path,
+            None => writable_settings_path(paths, default_scope)?,
+        };
+        update_json_file(&backups, &path, |root| {
+            object_entry(root, "skillOverrides")?
+                .insert(name.to_owned(), Value::String("off".to_owned()));
+            Ok(())
+        })?;
+        return Ok(format!("Skill \"{name}\" desactivada"));
+    }
+
+    for (_, path) in &defining {
+        update_json_file(&backups, path, |root| {
+            let overrides = object_entry(root, "skillOverrides")?;
+            overrides.remove(name);
+            if overrides.is_empty() {
+                root.remove("skillOverrides");
+            }
+            Ok(())
+        })?;
+    }
+    // Unreadable managed settings are not an error here: the snapshot already reports them.
+    let managed = paths
+        .settings_path(SettingsScope::Managed)
+        .and_then(|path| read_json_object(&path).ok())
+        .and_then(|root| skill_override_in(&root, name));
+    Ok(match managed {
+        Some(state) => format!(
+            "Skill \"{name}\" activada en tus archivos, pero la configuración administrada la \
+             mantiene en {state}"
+        ),
+        None => format!("Skill \"{name}\" activada"),
+    })
 }
 
 /// Which settings file a plugin toggle should go to so it actually takes effect: the local
