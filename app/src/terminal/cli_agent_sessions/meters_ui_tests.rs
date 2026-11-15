@@ -113,3 +113,54 @@ fn strip_segments_show_compaction_in_progress() {
         vec!["compacting (manual)", "transcript backed up"]
     );
 }
+
+#[test]
+fn global_chip_segments_show_only_plan_usage_without_cost() {
+    let global = GlobalMeters {
+        five_hour: Some(RateLimitWindow {
+            used_pct: 42.,
+            resets_at: Some(1_000),
+        }),
+        seven_day: Some(RateLimitWindow {
+            used_pct: 96.,
+            resets_at: None,
+        }),
+        cost_usd: Some(12.34),
+    };
+    let segments = global_chip_segments(&global);
+    assert_eq!(texts(&segments), vec!["5h 42%", "7d 96%"]);
+    assert_eq!(segments[0].tone, MeterTone::Normal);
+    assert_eq!(segments[1].tone, MeterTone::Danger);
+}
+
+#[test]
+fn global_chip_segments_skip_missing_window() {
+    let only_five_hour = GlobalMeters {
+        five_hour: Some(RateLimitWindow {
+            used_pct: 10.,
+            resets_at: None,
+        }),
+        ..Default::default()
+    };
+    assert_eq!(texts(&global_chip_segments(&only_five_hour)), vec!["5h 10%"]);
+
+    let only_seven_day = GlobalMeters {
+        seven_day: Some(RateLimitWindow {
+            used_pct: 88.,
+            resets_at: None,
+        }),
+        ..Default::default()
+    };
+    assert_eq!(texts(&global_chip_segments(&only_seven_day)), vec!["7d 88%"]);
+}
+
+#[test]
+fn global_chip_segments_empty_when_no_window_even_with_cost() {
+    let cost_only = GlobalMeters {
+        five_hour: None,
+        seven_day: None,
+        cost_usd: Some(5.),
+    };
+    assert!(global_chip_segments(&cost_only).is_empty());
+    assert!(global_chip_segments(&GlobalMeters::default()).is_empty());
+}
