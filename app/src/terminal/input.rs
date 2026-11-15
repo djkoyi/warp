@@ -11905,8 +11905,11 @@ impl Input {
         // Read from app clipboard
         let content = ctx.clipboard().read();
 
-        // If AI is disabled, attachment isn't possible
-        if !AISettings::as_ref(ctx).is_any_ai_enabled(ctx) {
+        // If AI is disabled, attachment isn't possible, except in the third-party CLI agent rich
+        // input, which doesn't depend on Warp AI.
+        let is_cli_agent_input_open =
+            CLIAgentSessionsModel::as_ref(ctx).is_input_open(self.terminal_view_id);
+        if !AISettings::as_ref(ctx).is_any_ai_enabled(ctx) && !is_cli_agent_input_open {
             self.insert_clipboard_text_content(ctx, content);
             return;
         }

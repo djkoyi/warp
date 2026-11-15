@@ -1101,8 +1101,10 @@ pub const PREVIEW_FLAGS: &[FeatureFlag] = &[FeatureFlag::LrcActivitySignal];
 /// want to enable the feature by default in app/Cargo.toml, rather than add it to RELEASE_FLAGS.
 pub const RELEASE_FLAGS: &[FeatureFlag] = &[
     FeatureFlag::CreditEquivalentBillingUsage,
-    FeatureFlag::Autoupdate,
-    FeatureFlag::Changelog,
+    // Autoupdate is intentionally not enabled here: this personal build must never poll Warp's
+    // release server or replace itself with an upstream build. It remains available via the
+    // `autoupdate` cargo feature. Changelog is also left out because it fetches release notes
+    // from Warp's servers at startup.
     FeatureFlag::CrashReporting,
     FeatureFlag::PeriodicHandoffCheckpoints,
     FeatureFlag::FactorySkillReferences,

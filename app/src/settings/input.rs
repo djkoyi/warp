@@ -200,7 +200,7 @@ define_settings_group!(InputSettings,
         },
         show_agent_tips: ShowAgentTips {
             type: bool,
-            default: true,
+            default: false,
             supported_platforms: SupportedPlatforms::ALL,
             sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
             surface: settings::SettingSurfaces::GUI,

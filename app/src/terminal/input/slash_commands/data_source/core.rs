@@ -516,12 +516,16 @@ pub trait SlashCommandDataSource {
     /// vector when skills are globally unavailable. The caller decides whether skills apply for its
     /// surface (e.g. GUI hides them in cloud mode).
     fn match_skills(&self, query_text: &str, app: &AppContext) -> Vec<InlineItem> {
-        if !FeatureFlag::ListSkills.is_enabled() || !AISettings::as_ref(app).is_any_ai_enabled(app)
-        {
+        if !FeatureFlag::ListSkills.is_enabled() {
             return Vec::new();
         }
 
+        // Third-party CLI agent input lists skills even when Warp AI is disabled.
         let cli_agent_providers = self.active_cli_agent_providers(app);
+        if cli_agent_providers.is_none() && !AISettings::as_ref(app).is_any_ai_enabled(app) {
+            return Vec::new();
+        }
+
         let active_session = self.active_session().as_ref(app);
         let cwd_path = active_session.current_working_directory_location(app);
         let skills = SkillManager::handle(app)
