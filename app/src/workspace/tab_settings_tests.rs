@@ -87,6 +87,26 @@ fn hide_title_bar_search_bar_in_vertical_tabs_uses_vertical_tabs_path() {
 }
 
 #[test]
+fn show_account_usage_chip_defaults_to_true() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        TabSettings::handle(&app).read(&app, |settings, _ctx| {
+            assert!(*settings.show_account_usage_chip);
+        });
+    });
+}
+
+#[test]
+fn show_account_usage_chip_uses_claude_path() {
+    assert_eq!(
+        ShowAccountUsageChip::toml_path(),
+        Some("claude.show_account_usage_chip")
+    );
+    assert_eq!(ShowAccountUsageChip::toml_key(), "show_account_usage_chip");
+}
+
+#[test]
 fn header_toolbar_chip_selection_default_contains_code_review() {
     let config = HeaderToolbarChipSelection::Default;
     assert!(config.contains_item(&HeaderToolbarItemKind::CodeReview));
