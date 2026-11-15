@@ -21438,10 +21438,10 @@ impl Workspace {
         let theme = appearance.theme();
         let ui_font_family = appearance.ui_font_family();
 
-        let label_color: Fill = if self.puente_status.is_dimmed() {
-            internal_colors::text_disabled(theme, theme.background().into_solid()).into()
+        let label_color = if self.puente_status.is_dimmed() {
+            internal_colors::text_disabled(theme, theme.background().into_solid())
         } else {
-            Fill::success()
+            Fill::success().into_solid()
         };
         let label = Text::new_inline(self.puente_status.label(), ui_font_family, 12.)
             .with_color(label_color)
