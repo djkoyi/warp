@@ -3831,7 +3831,9 @@ impl Workspace {
                 | CLIAgentSessionsModelEvent::Ended { .. }
                 | CLIAgentSessionsModelEvent::MetersUpdated { .. }
         ) {
-            let global_segments = if meters_ui::meters_enabled(ctx) {
+            let global_segments = if meters_ui::meters_enabled(ctx)
+                && *TabSettings::as_ref(ctx).show_account_usage_chip
+            {
                 CLIAgentSessionsModel::as_ref(ctx)
                     .global_meters()
                     .map(|global| meters_ui::global_chip_segments(&global))
