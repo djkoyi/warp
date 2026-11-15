@@ -272,6 +272,30 @@ pub(super) fn spawn(options: PtyOptions) -> Result<PtySpawnInfo> {
 /// Does not perform any PTY-level setup; hand the returned `Command`
 /// to [`spawn_command_in_pty`].
 #[allow(clippy::too_many_arguments)]
+/// Environment variables that a Claude Code session sets for its own child processes. When Warp
+/// itself is launched from inside such a session (for example `./script/run` executed by Claude
+/// Code), every shell would inherit them and `claude` started in a tab would think it is a
+/// nested session: it stops saving its transcript, so it can never be resumed.
+const INHERITED_AGENT_SESSION_ENV: &[&str] = &[
+    "CLAUDECODE",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_EFFORT",
+    "CLAUDE_PID",
+    "AI_AGENT",
+];
+
+fn remove_inherited_agent_session_env(builder: &mut Command) {
+    for name in INHERITED_AGENT_SESSION_ENV {
+        builder.env_remove(name);
+    }
+}
+
 fn build_host_shell_command(
     shell_starter: DirectShellStarter,
     window_id: Option<usize>,
