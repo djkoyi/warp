@@ -45,7 +45,7 @@ void requestNotificationPermissions(void *on_completion_callback) {
 
 void sendNotificationWithErrorHandler(NSString *title, NSString *body, NSString *data,
                                       void (^error_handler)(NSUInteger error_type, id error_msg),
-                                      BOOL playSound) {
+                                      BOOL playSound, BOOL showWhileAppActive) {
     UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
     [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *settings) {
       if (settings.authorizationStatus == UNAuthorizationStatusDenied) {
@@ -66,6 +66,7 @@ void sendNotificationWithErrorHandler(NSString *title, NSString *body, NSString 
 
           content.userInfo = @{
               @"DATA" : data,
+              WarpShowWhileAppActiveKey : @(showWhileAppActive),
           };
 
           // Configure the trigger to send the notification after 1 second.
@@ -89,7 +90,8 @@ void sendNotificationWithErrorHandler(NSString *title, NSString *body, NSString 
     }];
 }
 
-void sendNotification(id title, id body, id data, void *on_error_callback, BOOL playSound) {
+void sendNotification(id title, id body, id data, void *on_error_callback, BOOL playSound,
+                      BOOL showWhileAppActive) {
     sendNotificationWithErrorHandler(
         title, body, data,
         ^(NSUInteger error_type, id error_msg) {
@@ -97,5 +99,5 @@ void sendNotification(id title, id body, id data, void *on_error_callback, BOOL 
             warp_on_notification_send_error(error_type, error_msg, on_error_callback);
           });
         },
-        playSound);
+        playSound, showWhileAppActive);
 }

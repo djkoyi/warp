@@ -7,10 +7,10 @@ use warp_core::ui::appearance::Appearance;
 use warp_core::ui::theme::Fill;
 use warp_core::ui::theme::color::internal_colors;
 use warpui::elements::{
-    Align, Border, ChildAnchor, ConstrainedBox, Container, CornerRadius, CrossAxisAlignment,
-    DropShadow, Element, Flex, Hoverable, MainAxisAlignment, MainAxisSize, MouseStateHandle,
-    OffsetPositioning, ParentAnchor, ParentElement, ParentOffsetBounds, Radius, Shrinkable, Stack,
-    Text,
+    Align, Border, ChildAnchor, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox,
+    Container, CornerRadius, CrossAxisAlignment, DropShadow, Element, Flex, Hoverable,
+    MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentAnchor,
+    ParentElement, ParentOffsetBounds, Radius, ScrollbarWidth, Shrinkable, Stack, Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::keymap::FixedBinding;
@@ -59,6 +59,7 @@ pub struct CLIAgentOverviewModal {
     rows: Vec<CLIAgentOverviewRow>,
     row_mouse_states: Vec<MouseStateHandle>,
     close_button_mouse_state: MouseStateHandle,
+    list_scroll_state: ClippedScrollStateHandle,
 }
 
 impl CLIAgentOverviewModal {
@@ -67,6 +68,7 @@ impl CLIAgentOverviewModal {
             rows: Vec::new(),
             row_mouse_states: Vec::new(),
             close_button_mouse_state: MouseStateHandle::default(),
+            list_scroll_state: ClippedScrollStateHandle::default(),
         }
     }
 
@@ -318,9 +320,20 @@ impl View for CLIAgentOverviewModal {
                 Flex::column()
                     .with_child(Container::new(header).with_margin_bottom(12.).finish())
                     .with_child(
-                        ConstrainedBox::new(list.finish())
-                            .with_max_height(MAX_LIST_HEIGHT)
+                        ConstrainedBox::new(
+                            ClippedScrollable::vertical(
+                                self.list_scroll_state.clone(),
+                                list.finish(),
+                                ScrollbarWidth::Auto,
+                                theme.nonactive_ui_detail().into(),
+                                theme.active_ui_detail().into(),
+                                warpui::elements::Fill::None,
+                            )
+                            .with_overlayed_scrollbar()
                             .finish(),
+                        )
+                        .with_max_height(MAX_LIST_HEIGHT)
+                        .finish(),
                     )
                     .finish(),
             )

@@ -37,6 +37,7 @@ unsafe extern "C" {
         data: id,
         on_error_callback: *const c_void,
         play_sound: BOOL,
+        show_while_app_active: BOOL,
     );
     fn isDarkMode() -> BOOL;
     fn registerGlobalHotkey(key_code: NSUInteger, modifiers_key: NSUInteger);
@@ -342,6 +343,11 @@ impl platform::Delegate for AppDelegate {
                 make_nsstring(notification_content.data().unwrap_or_default()),
                 Box::into_raw(Box::new(callback)) as *const c_void,
                 if notification_content.play_sound() {
+                    YES
+                } else {
+                    NO
+                },
+                if notification_content.show_while_app_active() {
                     YES
                 } else {
                     NO

@@ -396,9 +396,8 @@ use crate::terminal::available_shells::AvailableShells;
 use crate::terminal::block_list_viewport::InputMode;
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{PluginModalKind, plugin_manager_for};
-use crate::terminal::cli_agent_sessions::{
-    CLIAgentSessionsModel, CLIAgentSessionsModelEvent, meters_ui,
-};
+use crate::terminal::cli_agent_sessions::meters_ui::{self, MeterSegment};
+use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
 use crate::terminal::enable_auto_reload_modal::{
     EnableAutoReloadModal, EnableAutoReloadModalEvent,
 };
@@ -1168,6 +1167,9 @@ pub struct Workspace {
     build_plan_migration_modal: ViewHandle<BuildPlanMigrationModal>,
     codex_modal: ViewHandle<CodexModal>,
     cli_agent_overview_modal: ViewHandle<CLIAgentOverviewModal>,
+    /// Meter segments each CLI agent terminal's tab showed at the last re-render, so meter updates
+    /// that change nothing visible skip the re-render.
+    rendered_tab_meter_segments: HashMap<EntityId, Vec<MeterSegment>>,
     cloud_agent_capacity_modal: ViewHandle<CloudAgentCapacityModal>,
     free_ai_removal_modal: ViewHandle<FreeAiRemovalModal>,
     /// Second instance of the free-AI-removal modal, opened on demand when a
@@ -3595,6 +3597,7 @@ impl Workspace {
             notification_toast_stack,
             codex_modal,
             cli_agent_overview_modal,
+            rendered_tab_meter_segments: HashMap::new(),
             cloud_agent_capacity_modal,
             free_ai_removal_modal,
             prompt_suggestions_unavailable_modal,
@@ -3822,7 +3825,26 @@ impl Workspace {
             if self.current_workspace_state.is_cli_agent_overview_open {
                 self.refresh_cli_agent_overview(ctx);
             }
-            ctx.notify();
+            let terminal_view_id = event.terminal_view_id();
+            let segments = meters_ui::terminal_tab_segments(terminal_view_id, ctx);
+            let tab_unchanged = self
+                .rendered_tab_meter_segments
+                .get(&terminal_view_id)
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+                == segments.as_slice();
+            if segments.is_empty() {
+                self.rendered_tab_meter_segments.remove(&terminal_view_id);
+            } else {
+                self.rendered_tab_meter_segments
+                    .insert(terminal_view_id, segments);
+            }
+            // Meter updates arrive with every status line repaint; most change nothing on the tab.
+            let skip_render = tab_unchanged
+                && matches!(event, CLIAgentSessionsModelEvent::MetersUpdated { .. });
+            if !skip_render {
+                ctx.notify();
+            }
         }
     }
 
@@ -16445,7 +16467,8 @@ impl Workspace {
                             notification.body.to_string(),
                             Some(notification_data_str),
                             play_sound,
-                        ),
+                        )
+                        .with_show_while_app_active(notification.show_while_app_active),
                         move |workspace, notification_error, ctx| {
                             // Log to sentry if unknown error
                             if let NotificationSendError::Other { error_message } =
@@ -19870,7 +19893,7 @@ impl Workspace {
         ctx.notify();
     }
 
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(unix)]
     fn install_claude_meters_bridge(&mut self, ctx: &mut ViewContext<Self>) {
         use crate::terminal::cli_agent_sessions::meters_bridge;
 
@@ -19880,9 +19903,14 @@ impl Workspace {
                     .chained_status_line
                     .map(|previous| format!(" Your status line ({previous}) still runs."))
                     .unwrap_or_default();
+                let post_compact = if report.post_compact_registered {
+                    ""
+                } else {
+                    " PostCompact hook skipped: it needs Claude Code 2.1.76 or later."
+                };
                 DismissibleToast::success(format!(
-                    "Claude Code meters bridge installed in {}.{chained} Restart Claude Code \
-                     sessions to load it.",
+                    "Claude Code meters bridge installed in {}.{chained}{post_compact} Restart \
+                     Claude Code sessions to load it.",
                     report.settings_path.display()
                 ))
             }
@@ -25945,7 +25973,7 @@ impl TypedActionView for Workspace {
             }
             ToggleCLIAgentOverview => self.toggle_cli_agent_overview(ctx),
             InstallClaudeMetersBridge => {
-                #[cfg(not(target_family = "wasm"))]
+                #[cfg(unix)]
                 self.install_claude_meters_bridge(ctx);
             }
             FocusPane(locator) => {

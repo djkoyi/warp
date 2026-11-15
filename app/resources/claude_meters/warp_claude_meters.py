@@ -29,13 +29,14 @@ The script never fails loudly: any error is swallowed so Claude Code is never
 blocked or disturbed.
 """
 
+import hashlib
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
-import tempfile
 import time
 
 PROTOCOL_VERSION = 1
@@ -43,6 +44,10 @@ SENTINEL = "warp://cli-agent"
 MAX_TEXT = 300
 MAX_SEEN_IDS = 500
 CHAIN_TIMEOUT_SECS = 5
+# Bounds the work of one invocation on a long transcript; the rest is read on later ones.
+MAX_TRANSCRIPT_READ_BYTES = 8 * 1024 * 1024
+# An unchanged status line is re-sent this often, so a pane that missed it still catches up.
+UNCHANGED_RESEND_SECS = 30
 
 
 def claude_dir():
@@ -86,8 +91,12 @@ def clip(text, limit=MAX_TEXT):
     return text[:limit] if text else None
 
 
-def send(payload):
-    """Writes one OSC 777 notification to the controlling terminal."""
+def send(payload, dedupe_key=None):
+    """Writes one OSC 777 notification to the controlling terminal.
+
+    With `dedupe_key`, a payload identical to the last one sent under that key is skipped unless
+    UNCHANGED_RESEND_SECS have passed.
+    """
     if not in_warp():
         return
     payload = {key: value for key, value in payload.items() if value is not None}
@@ -96,6 +105,8 @@ def send(payload):
     # ensure_ascii keeps ESC/BEL/C1 bytes out of the sequence; `;` is escaped because the
     # terminal splits OSC parameters on it.
     body = json.dumps(payload, ensure_ascii=True, separators=(",", ":")).replace(";", "\\u003b")
+    if dedupe_key is not None and is_unchanged(dedupe_key, body):
+        return
     sequence = "\x1b]777;notify;%s;%s\x07" % (SENTINEL, body)
     try:
         fd = os.open("/dev/tty", os.O_WRONLY | getattr(os, "O_NOCTTY", 0))
@@ -117,23 +128,86 @@ def common_fields(data):
     }
 
 
-# --- Session token totals -------------------------------------------------------------------
+# --- Per-session state -----------------------------------------------------------------------
 
 
-def state_path(session_id):
+def state_dir():
+    """`<claude dir>/warp/state`, created private. Returns None unless it is a real directory
+    owned by this user, so a planted symlink or foreign directory is never written through."""
+    base = os.path.join(warp_dir(), "state")
+    try:
+        os.makedirs(base, mode=0o700, exist_ok=True)
+        info = os.lstat(base)
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
+            return None
+        if stat.S_IMODE(info.st_mode) != 0o700:
+            os.chmod(base, 0o700)
+    except OSError:
+        return None
+    return base
+
+
+def state_path(session_id, suffix=".json"):
     safe = re.sub(r"[^A-Za-z0-9_-]", "", session_id or "")[:128]
     if not safe:
         return None
-    base = os.path.join(tempfile.gettempdir(), "warp-claude-meters-%d" % os.getuid())
-    os.makedirs(base, mode=0o700, exist_ok=True)
-    return os.path.join(base, safe + ".json")
+    base = state_dir()
+    if base is None:
+        return None
+    return os.path.join(base, safe + suffix)
+
+
+def write_state_file(path, text):
+    """Replaces `path` atomically; the temp name is per process so concurrent runs never mix."""
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    try:
+        with open(tmp, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
+def is_unchanged(key, body):
+    """Whether `body` equals the last payload sent under `key` recently. Records it otherwise."""
+    path = state_path(key, ".sent")
+    if path is None:
+        return False
+    digest = hashlib.sha256(body.encode("ascii")).hexdigest()
+    try:
+        with open(path, encoding="utf-8") as handle:
+            previous = handle.read()
+        if previous == digest and time.time() - os.path.getmtime(path) < UNCHANGED_RESEND_SECS:
+            return True
+    except OSError:
+        pass
+    write_state_file(path, digest)
+    return False
+
+
+def forget_sent(key):
+    """Makes the next payload under `key` go out even if unchanged (e.g. a new pane needs it)."""
+    path = state_path(key, ".sent")
+    if path is None:
+        return
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+
+# --- Session token totals -------------------------------------------------------------------
 
 
 def session_tokens(session_id, transcript_path):
     """Sums usage over every assistant message of the transcript, incrementally.
 
     Claude Code writes one transcript line per content block, each repeating the
-    message's usage, so usage is counted once per message id.
+    message's usage, so usage is counted once per message id. Returns None until the
+    whole transcript has been read, so a partial total is never shown.
     """
     if not transcript_path or not os.path.isfile(transcript_path):
         return None
@@ -156,8 +230,11 @@ def session_tokens(session_id, transcript_path):
     seen_set = set(seen)
     with open(transcript_path, "rb") as handle:
         handle.seek(state["offset"])
-        chunk = handle.read()
+        chunk = handle.read(MAX_TRANSCRIPT_READ_BYTES)
     end = chunk.rfind(b"\n")
+    if end < 0 and len(chunk) == MAX_TRANSCRIPT_READ_BYTES:
+        # A single line longer than the cap: skip it; its tail fails to parse and is ignored.
+        state["offset"] += len(chunk)
     if end >= 0:
         for raw in chunk[: end + 1].splitlines():
             try:
@@ -202,10 +279,9 @@ def session_tokens(session_id, transcript_path):
         state["offset"] += end + 1
     state["seen"] = seen[-MAX_SEEN_IDS:]
 
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(state, handle)
-    os.replace(tmp, path)
+    write_state_file(path, json.dumps(state))
+    if size - state["offset"] > MAX_TRANSCRIPT_READ_BYTES:
+        return None
     return {"input": state["input"], "output": state["output"]}
 
 
@@ -280,7 +356,7 @@ def chained_status_line(raw):
             capture_output=True,
             timeout=CHAIN_TIMEOUT_SECS,
         )
-        return result.stdout.decode("utf-8", "replace")
+        return result.stdout
     except Exception:
         return None
 
@@ -295,12 +371,14 @@ def run_statusline():
         try:
             payload = {"event": "status_line", "meters": build_meters(data)}
             payload.update(common_fields(data))
-            send(payload)
+            send(payload, dedupe_key=data.get("session_id"))
         except Exception:
             pass
     chained = chained_status_line(raw)
     if chained is not None:
-        sys.stdout.write(chained)
+        # Bytes as-is: the chained command's encoding and escape sequences are its own.
+        sys.stdout.buffer.write(chained)
+        sys.stdout.buffer.flush()
     elif isinstance(data, dict):
         sys.stdout.write(default_status_line(data))
 
@@ -330,19 +408,14 @@ def backup_transcript(data, trigger):
 
 
 def prompt_path(session_id):
-    path = state_path(session_id)
-    return path[: -len(".json")] + ".prompt" if path else None
+    return state_path(session_id, ".prompt")
 
 
 def remember_prompt(session_id, query):
     path = prompt_path(session_id)
     if not path or not query:
         return
-    try:
-        with open(path, "w", encoding="utf-8") as handle:
-            handle.write(query)
-    except OSError:
-        pass
+    write_state_file(path, query)
 
 
 def recall_prompt(session_id):
@@ -365,6 +438,8 @@ def run_hook():
         return
     name = data.get("hook_event_name")
     base = common_fields(data)
+    if name == "SessionStart":
+        forget_sent(data.get("session_id"))
     lifecycle = lifecycle_enabled()
     payload = None
 
@@ -377,6 +452,10 @@ def run_hook():
                 payload["backup_path"] = backup_transcript(data, trigger)
             except Exception:
                 pass
+    elif name == "SessionStart" and data.get("source") == "compact" and not lifecycle:
+        # The compaction is over. Without lifecycle events Warp would otherwise only learn that
+        # from PostCompact, which older Claude Code versions lack.
+        payload = {"event": "post_compact"}
     elif not lifecycle:
         return
     elif name == "SessionStart":

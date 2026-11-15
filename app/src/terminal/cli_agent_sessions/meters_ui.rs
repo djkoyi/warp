@@ -4,9 +4,9 @@
 use pathfinder_color::ColorU;
 use warpui::elements::{Element, Flex, ParentElement, Text, Wrap};
 use warpui::fonts::{Properties, Weight};
-use warpui::{AppContext, SingletonEntity};
+use warpui::{AppContext, EntityId, SingletonEntity};
 
-use super::CLIAgentSession;
+use super::{CLIAgentSession, CLIAgentSessionsModel};
 use super::meters::{
     CLIAgentActivity, CLIAgentMeters, CLIAgentMetersSnapshot, CompactionState, ContextLevel,
     RateLimitWindow, context_level, format_cost, format_pct, format_reset_in, format_tokens,
@@ -136,6 +136,24 @@ pub fn tab_segments(
         segments.push(MeterSegment::new(activity.label(), activity_tone(activity)));
     }
     segments
+}
+
+/// The [`tab_segments`] of the CLI agent session in `terminal_view_id`, empty when meters are off
+/// or the terminal has no session.
+pub fn terminal_tab_segments(terminal_view_id: EntityId, app: &AppContext) -> Vec<MeterSegment> {
+    if !meters_enabled(app) {
+        return Vec::new();
+    }
+    let sessions = CLIAgentSessionsModel::as_ref(app);
+    let Some(session) = sessions.session(terminal_view_id) else {
+        return Vec::new();
+    };
+    let meters = sessions.meters(terminal_view_id);
+    tab_segments(
+        session_activity(session, meters),
+        meters,
+        compaction_warning_threshold(app),
+    )
 }
 
 /// Full meter segments for the coding agent toolbar.

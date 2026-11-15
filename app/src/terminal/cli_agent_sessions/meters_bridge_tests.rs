@@ -20,7 +20,7 @@ fn bridge_hook_count(settings: &Value, event: &str) -> usize {
 #[test]
 fn installs_into_empty_settings() {
     let mut settings = json!({});
-    let outcome = merge_settings(&mut settings, STATUS, HOOK).unwrap();
+    let outcome = merge_settings(&mut settings, STATUS, HOOK, true).unwrap();
 
     assert!(outcome.changed);
     assert_eq!(outcome.previous_status_line, None);
@@ -34,10 +34,10 @@ fn installs_into_empty_settings() {
 #[test]
 fn merge_is_idempotent() {
     let mut settings = json!({});
-    merge_settings(&mut settings, STATUS, HOOK).unwrap();
+    merge_settings(&mut settings, STATUS, HOOK, true).unwrap();
     let after_first = settings.clone();
 
-    let outcome = merge_settings(&mut settings, STATUS, HOOK).unwrap();
+    let outcome = merge_settings(&mut settings, STATUS, HOOK, true).unwrap();
     assert!(!outcome.changed);
     assert_eq!(settings, after_first);
 }
@@ -52,7 +52,7 @@ fn existing_status_line_is_chained_and_unrelated_settings_kept() {
             "PreToolUse": [{"matcher": "Bash", "hooks": [{"type": "command", "command": "guard"}]}]
         }
     });
-    let outcome = merge_settings(&mut settings, STATUS, HOOK).unwrap();
+    let outcome = merge_settings(&mut settings, STATUS, HOOK, true).unwrap();
 
     assert_eq!(
         outcome.previous_status_line.as_deref(),
@@ -74,9 +74,42 @@ fn existing_status_line_is_chained_and_unrelated_settings_kept() {
 
 #[test]
 fn rejects_unexpected_shapes_instead_of_overwriting() {
-    assert!(merge_settings(&mut json!([]), STATUS, HOOK).is_err());
-    assert!(merge_settings(&mut json!({"hooks": []}), STATUS, HOOK).is_err());
-    assert!(merge_settings(&mut json!({"hooks": {"Stop": {}}}), STATUS, HOOK).is_err());
+    assert!(merge_settings(&mut json!([]), STATUS, HOOK, true).is_err());
+    assert!(merge_settings(&mut json!({"hooks": []}), STATUS, HOOK, true).is_err());
+    assert!(merge_settings(&mut json!({"hooks": {"Stop": {}}}), STATUS, HOOK, true).is_err());
+}
+
+#[test]
+fn post_compact_is_only_added_when_supported() {
+    let mut settings = json!({});
+    merge_settings(&mut settings, STATUS, HOOK, false).unwrap();
+    assert_eq!(bridge_hook_count(&settings, "PostCompact"), 0);
+    assert_eq!(bridge_hook_count(&settings, "PreCompact"), 1);
+
+    let outcome = merge_settings(&mut settings, STATUS, HOOK, true).unwrap();
+    assert!(outcome.changed);
+    assert_eq!(bridge_hook_count(&settings, "PostCompact"), 1);
+}
+
+#[test]
+fn parses_claude_version_output() {
+    assert_eq!(
+        parse_claude_version("2.1.76 (Claude Code)\n"),
+        Some((2, 1, 76))
+    );
+    assert_eq!(parse_claude_version("garbage"), None);
+    assert!(parse_claude_version("2.1.75 (Claude Code)").unwrap() < POST_COMPACT_MIN_VERSION);
+    assert!(parse_claude_version("2.2.0").unwrap() >= POST_COMPACT_MIN_VERSION);
+}
+
+#[test]
+fn write_atomically_follows_through_to_the_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("settings.json");
+    fs::write(&target, "old").unwrap();
+    write_atomically(&target, b"new", None).unwrap();
+    assert_eq!(fs::read_to_string(&target).unwrap(), "new");
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1, "no temp file left");
 }
 
 #[test]

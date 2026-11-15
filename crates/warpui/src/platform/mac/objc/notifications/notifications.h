@@ -8,8 +8,11 @@ void requestNotificationPermissions(void* callback);
 void warp_on_request_notification_permissions_completed(NSUInteger outcome_type, id outcome_msg,
                                                         void* callback);
 
+// `userInfo` key of notifications that must show even while Warp is the frontmost app.
+#define WarpShowWhileAppActiveKey @"SHOW_WHILE_APP_ACTIVE"
+
 // Sends a desktop notification.
-void sendNotification(id, id, id, void*, BOOL);
+void sendNotification(id, id, id, void*, BOOL, BOOL);
 
 // This method, implemented in Rust, invokes the callback to allow the App to
 // take action when a notification fails to send.

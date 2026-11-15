@@ -176,7 +176,7 @@ impl CLIAgentsPageView {
         })
     }
 
-    #[cfg(not(target_family = "wasm"))]
+    #[cfg(unix)]
     fn install_meters_bridge(&mut self) {
         self.meters_bridge_status = Some(match meters_bridge::install() {
             Ok(report) => {
@@ -190,6 +190,11 @@ impl CLIAgentsPageView {
                 }
                 if let Some(backup) = &report.settings_backup_path {
                     message.push_str(&format!(" Backup: {}.", backup.display()));
+                }
+                if !report.post_compact_registered {
+                    message.push_str(
+                        " PostCompact hook skipped: it needs Claude Code 2.1.76 or later.",
+                    );
                 }
                 message.push_str(" Restart Claude Code sessions to load it.");
                 message
@@ -434,7 +439,7 @@ impl TypedActionView for CLIAgentsPageView {
                 ctx.notify();
             }
             CLIAgentsPageAction::InstallMetersBridge => {
-                #[cfg(not(target_family = "wasm"))]
+                #[cfg(unix)]
                 self.install_meters_bridge();
                 ctx.notify();
             }
@@ -1104,21 +1109,24 @@ impl SettingsWidget for CLIAgentMetersWidget {
             app,
         ));
 
-        column.add_child(
-            Container::new(
-                Flex::row()
-                    .with_child(ChildView::new(&view.install_meters_bridge_button).finish())
-                    .finish(),
-            )
-            .with_margin_bottom(4.)
-            .finish(),
-        );
-        let bridge_text = view.meters_bridge_status.as_deref().unwrap_or(
-            "Copies the bridge script to ~/.claude/warp and registers it as the Claude Code \
-             statusLine command and as hooks in ~/.claude/settings.json (a backup is kept; an \
-             existing status line keeps running).",
-        );
-        column.add_child(Self::render_description(bridge_text, appearance, app));
+        // The bridge is a POSIX-shell command line that runs `python3`.
+        if cfg!(unix) {
+            column.add_child(
+                Container::new(
+                    Flex::row()
+                        .with_child(ChildView::new(&view.install_meters_bridge_button).finish())
+                        .finish(),
+                )
+                .with_margin_bottom(4.)
+                .finish(),
+            );
+            let bridge_text = view.meters_bridge_status.as_deref().unwrap_or(
+                "Copies the bridge script to ~/.claude/warp and registers it as the Claude Code \
+                 statusLine command and as hooks in ~/.claude/settings.json (a backup is kept; \
+                 an existing status line keeps running).",
+            );
+            column.add_child(Self::render_description(bridge_text, appearance, app));
+        }
 
         column.finish()
     }

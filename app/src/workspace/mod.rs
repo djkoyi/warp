@@ -1596,9 +1596,8 @@ pub fn init(app: &mut AppContext) {
             "Install Claude Code meters bridge (status line and hooks)",
             WorkspaceAction::InstallClaudeMetersBridge,
         )
-        .with_enabled(|| {
-            cfg!(not(target_family = "wasm")) && FeatureFlag::CLIAgentMeters.is_enabled()
-        })
+        // The bridge is a POSIX-shell command line that runs `python3`.
+        .with_enabled(|| cfg!(unix) && FeatureFlag::CLIAgentMeters.is_enabled())
         .with_context_predicate(id!("Workspace")),
     ]);
 }

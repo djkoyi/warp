@@ -3,6 +3,7 @@
 //! `settings.json`. An existing status line is preserved by chaining to it from the bridge.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::{env, fs, io};
 
 use anyhow::{Context as _, bail};
@@ -27,8 +28,12 @@ const HOOK_EVENTS: &[&str] = &[
     "PostToolUse",
     "Stop",
     "PreCompact",
-    "PostCompact",
+    POST_COMPACT_EVENT,
 ];
+
+const POST_COMPACT_EVENT: &str = "PostCompact";
+/// First Claude Code release with the `PostCompact` hook; older ones reject unknown hook events.
+const POST_COMPACT_MIN_VERSION: (u32, u32, u32) = (2, 1, 76);
 
 /// What [`install`] did.
 #[derive(Debug)]
@@ -39,6 +44,8 @@ pub struct InstallReport {
     pub settings_backup_path: Option<PathBuf>,
     /// The status line command that was replaced and is now chained from the bridge.
     pub chained_status_line: Option<String>,
+    /// Whether the `PostCompact` hook was registered (it needs a recent enough Claude Code).
+    pub post_compact_registered: bool,
 }
 
 /// Result of merging the bridge into a Claude Code settings object.
@@ -86,12 +93,74 @@ fn invokes_bridge(command: Option<&Value>) -> bool {
         .is_some_and(|command| command.contains(SCRIPT_MARKER))
 }
 
+/// Parses the `major.minor.patch` that `claude --version` prints first (e.g. `2.1.76 (Claude
+/// Code)`).
+pub fn parse_claude_version(output: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = output.split_whitespace().next()?.split('.');
+    let mut next = || parts.next()?.parse::<u32>().ok();
+    Some((next()?, next()?, next()?))
+}
+
+fn claude_supports_post_compact() -> bool {
+    let version = Command::new("claude")
+        .arg("--version")
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| parse_claude_version(&String::from_utf8_lossy(&output.stdout)));
+    version.is_some_and(|version| version >= POST_COMPACT_MIN_VERSION)
+}
+
+fn ensure_python3_works() -> anyhow::Result<()> {
+    let output = Command::new("python3")
+        .arg("--version")
+        .output()
+        .context("python3 was not found; the meters bridge needs it")?;
+    if !output.status.success() {
+        bail!(
+            "`python3 --version` failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(())
+}
+
+/// Replaces `target` with `contents` via a temporary file in the same directory and a rename, so
+/// readers never see a partial file. `permissions` are applied before the rename.
+fn write_atomically(
+    target: &Path,
+    contents: &[u8],
+    permissions: Option<fs::Permissions>,
+) -> anyhow::Result<()> {
+    let file_name = target
+        .file_name()
+        .with_context(|| format!("{} has no file name", target.display()))?;
+    let mut tmp_name = file_name.to_owned();
+    tmp_name.push(format!(".warp-tmp-{}", std::process::id()));
+    let tmp_path = target.with_file_name(tmp_name);
+    let result = (|| {
+        fs::write(&tmp_path, contents)
+            .with_context(|| format!("writing {}", tmp_path.display()))?;
+        if let Some(permissions) = permissions {
+            fs::set_permissions(&tmp_path, permissions)
+                .with_context(|| format!("setting permissions on {}", tmp_path.display()))?;
+        }
+        fs::rename(&tmp_path, target).with_context(|| format!("replacing {}", target.display()))
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+    }
+    result
+}
+
 /// Points `statusLine` at the bridge and appends a bridge hook for every event in [`HOOK_EVENTS`]
-/// that does not already have one. Unrelated settings and hooks are left untouched.
+/// that does not already have one. `PostCompact` is only added when `include_post_compact` is set.
+/// Unrelated settings and hooks are left untouched.
 pub fn merge_settings(
     settings: &mut Value,
     status_line_command: &str,
     hook_command: &str,
+    include_post_compact: bool,
 ) -> anyhow::Result<MergeOutcome> {
     let Some(root) = settings.as_object_mut() else {
         bail!("settings.json is not a JSON object");
@@ -124,7 +193,10 @@ pub fn merge_settings(
     let Some(hooks) = hooks.as_object_mut() else {
         bail!("`hooks` in settings.json is not a JSON object");
     };
-    for event in HOOK_EVENTS {
+    for event in HOOK_EVENTS
+        .iter()
+        .filter(|event| include_post_compact || **event != POST_COMPACT_EVENT)
+    {
         let matchers = hooks
             .entry(*event)
             .or_insert_with(|| Value::Array(Vec::new()));
@@ -153,28 +225,39 @@ pub fn merge_settings(
 }
 
 /// Writes the bridge script and registers it in Claude Code's user `settings.json`. Idempotent.
-/// Refuses to touch a `settings.json` it cannot parse.
+/// Refuses to touch a `settings.json` it cannot parse, or anything at all if `python3` does not
+/// run. A symlinked `settings.json` stays a symlink: its target is what gets rewritten.
 pub fn install() -> anyhow::Result<InstallReport> {
+    ensure_python3_works()?;
+
     let claude_dir = claude_home_dir()?;
     let bridge_dir = claude_dir.join("warp");
     fs::create_dir_all(&bridge_dir)
         .with_context(|| format!("creating {}", bridge_dir.display()))?;
 
     let script_path = bridge_dir.join(SCRIPT_FILE_NAME);
-    fs::write(&script_path, BRIDGE_SCRIPT)
-        .with_context(|| format!("writing {}", script_path.display()))?;
     #[cfg(unix)]
-    {
+    let script_permissions = {
         use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&script_path, fs::Permissions::from_mode(0o755))?;
-    }
+        Some(fs::Permissions::from_mode(0o755))
+    };
+    #[cfg(not(unix))]
+    let script_permissions = None;
+    write_atomically(&script_path, BRIDGE_SCRIPT.as_bytes(), script_permissions)?;
 
     let settings_path = claude_dir.join("settings.json");
-    let original = match fs::read_to_string(&settings_path) {
+    let real_settings_path = match fs::canonicalize(&settings_path) {
+        Ok(path) => path,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => settings_path.clone(),
+        Err(err) => {
+            return Err(err).with_context(|| format!("resolving {}", settings_path.display()));
+        }
+    };
+    let original = match fs::read_to_string(&real_settings_path) {
         Ok(contents) => Some(contents),
         Err(err) if err.kind() == io::ErrorKind::NotFound => None,
         Err(err) => {
-            return Err(err).with_context(|| format!("reading {}", settings_path.display()));
+            return Err(err).with_context(|| format!("reading {}", real_settings_path.display()));
         }
     };
     let mut settings = match original.as_deref().map(str::trim) {
@@ -183,10 +266,12 @@ pub fn install() -> anyhow::Result<InstallReport> {
             .with_context(|| format!("{} is not valid JSON", settings_path.display()))?,
     };
 
+    let post_compact_registered = claude_supports_post_compact();
     let outcome = merge_settings(
         &mut settings,
         &bridge_command(&script_path, "statusline"),
         &bridge_command(&script_path, "hook"),
+        post_compact_registered,
     )?;
 
     if let Some(previous) = &outcome.previous_status_line {
@@ -197,22 +282,25 @@ pub fn install() -> anyhow::Result<InstallReport> {
 
     let mut settings_backup_path = None;
     if outcome.changed {
-        if let Some(original) = &original {
+        let mut permissions = None;
+        if original.is_some() {
             let stamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .map(|d| d.as_secs())
                 .unwrap_or_default();
             let backup = claude_dir.join(format!("settings.json.bak-warp-meters-{stamp}"));
-            fs::write(&backup, original)
+            // `fs::copy` keeps the original's permissions on the backup too.
+            fs::copy(&real_settings_path, &backup)
                 .with_context(|| format!("writing {}", backup.display()))?;
             settings_backup_path = Some(backup);
+            permissions = Some(
+                fs::metadata(&real_settings_path)
+                    .with_context(|| format!("reading {}", real_settings_path.display()))?
+                    .permissions(),
+            );
         }
         let serialized = serde_json::to_string_pretty(&settings)? + "\n";
-        let tmp_path = claude_dir.join("settings.json.warp-tmp");
-        fs::write(&tmp_path, serialized)
-            .with_context(|| format!("writing {}", tmp_path.display()))?;
-        fs::rename(&tmp_path, &settings_path)
-            .with_context(|| format!("replacing {}", settings_path.display()))?;
+        write_atomically(&real_settings_path, serialized.as_bytes(), permissions)?;
     }
 
     Ok(InstallReport {
@@ -220,6 +308,7 @@ pub fn install() -> anyhow::Result<InstallReport> {
         settings_path,
         settings_backup_path,
         chained_status_line: outcome.previous_status_line,
+        post_compact_registered,
     })
 }
 

@@ -148,7 +148,10 @@ impl CLIAgentMeters {
             }
             CLIAgentEventType::PostCompact => {
                 self.bridge_connected = true;
-                self.compaction.finish(event.payload.compact_trigger);
+                // `SessionStart` (source `compact`) may already have ended this compaction.
+                if self.compaction.in_progress.is_some() {
+                    self.compaction.finish(event.payload.compact_trigger);
+                }
             }
             CLIAgentEventType::IdlePrompt | CLIAgentEventType::NeedsInput => {
                 self.awaiting_user = true;

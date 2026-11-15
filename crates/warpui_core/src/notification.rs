@@ -15,6 +15,9 @@ pub struct UserNotification {
     data: Option<String>,
     // Whether to play sound with the notification.
     play_sound: bool,
+    /// Whether to show the notification even while the app is frontmost (macOS hides those by
+    /// default).
+    show_while_app_active: bool,
 }
 
 impl UserNotification {
@@ -32,6 +35,7 @@ impl UserNotification {
             body,
             data,
             play_sound: true,
+            show_while_app_active: false,
         }
     }
 
@@ -46,6 +50,7 @@ impl UserNotification {
             body,
             data,
             play_sound,
+            show_while_app_active: false,
         }
     }
 
@@ -68,6 +73,15 @@ impl UserNotification {
 
     pub fn play_sound(&self) -> bool {
         self.play_sound
+    }
+
+    pub fn with_show_while_app_active(mut self, show_while_app_active: bool) -> Self {
+        self.show_while_app_active = show_while_app_active;
+        self
+    }
+
+    pub fn show_while_app_active(&self) -> bool {
+        self.show_while_app_active
     }
 }
 

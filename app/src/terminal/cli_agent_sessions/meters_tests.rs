@@ -241,6 +241,17 @@ fn compaction_without_post_compact_hook_ends_on_session_start() {
 }
 
 #[test]
+fn post_compact_after_session_start_counts_once() {
+    let mut meters = CLIAgentMeters::default();
+    meters.apply_event(&bare(CLIAgentEventType::PreCompact));
+    meters.apply_event(&bare(CLIAgentEventType::SessionStart));
+    meters.apply_event(&bare(CLIAgentEventType::PostCompact));
+
+    assert_eq!(meters.compaction.in_progress, None);
+    assert_eq!(meters.compaction.count, 1);
+}
+
+#[test]
 fn unchanged_status_line_reports_no_change() {
     let mut meters = CLIAgentMeters::default();
     let status = event(

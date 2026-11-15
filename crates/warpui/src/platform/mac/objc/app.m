@@ -8,6 +8,7 @@
 #import "host_view.h"
 #import "hotkey.h"
 #import "menus.h"
+#import "notifications/notifications.h"
 
 #import "reachability.h"
 
@@ -472,11 +473,17 @@ static BOOL isSystemInitiatedTermination(void) {
         visible ? NSApplicationActivationPolicyRegular : NSApplicationActivationPolicyAccessory;
     return [NSApp setActivationPolicy:policy];
 }
-// Without this, macOS drops notifications while Warp is the frontmost app, which hides the ones
-// sent for agents running in background tabs of the active window.
+// macOS drops notifications while Warp is the frontmost app. That stays the default; only the
+// ones flagged for agents running in background tabs of the active window are shown.
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center
        willPresentNotification:(UNNotification *)notification
          withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler {
+    NSNumber *showWhileAppActive =
+        notification.request.content.userInfo[WarpShowWhileAppActiveKey];
+    if (![showWhileAppActive isKindOfClass:[NSNumber class]] || ![showWhileAppActive boolValue]) {
+        completionHandler(UNNotificationPresentationOptionNone);
+        return;
+    }
     if (@available(macOS 11.0, *)) {
         completionHandler(UNNotificationPresentationOptionBanner |
                           UNNotificationPresentationOptionList |

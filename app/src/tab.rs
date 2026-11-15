@@ -39,7 +39,6 @@ use crate::launch_configs::launch_config::LaunchConfig;
 use crate::menu::{MenuAction, MenuItem, MenuItemFields};
 use crate::pane_group::{PaneGroup, PaneId};
 use crate::shell_indicator::ShellIndicatorType;
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
 use crate::terminal::cli_agent_sessions::meters_ui::{self, MeterSegment};
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::shared_session::manager::Manager;
@@ -1277,23 +1276,11 @@ impl<'a> TabComponent<'a> {
     }
 
     fn meter_segments(tab: &TabData, app: &AppContext) -> Vec<MeterSegment> {
-        if !meters_ui::meters_enabled(app) {
-            return Vec::new();
-        }
-        let Some(terminal_view) = tab.pane_group.as_ref(app).focused_session_view(app) else {
-            return Vec::new();
-        };
-        let sessions = CLIAgentSessionsModel::as_ref(app);
-        let terminal_view_id = terminal_view.id();
-        let Some(session) = sessions.session(terminal_view_id) else {
-            return Vec::new();
-        };
-        let meters = sessions.meters(terminal_view_id);
-        meters_ui::tab_segments(
-            meters_ui::session_activity(session, meters),
-            meters,
-            meters_ui::compaction_warning_threshold(app),
-        )
+        tab.pane_group
+            .as_ref(app)
+            .focused_session_view(app)
+            .map(|terminal_view| meters_ui::terminal_tab_segments(terminal_view.id(), app))
+            .unwrap_or_default()
     }
 
     /// Marks this tab as being rendered inside the floating chip used by the

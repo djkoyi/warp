@@ -828,6 +828,9 @@ pub struct NotificationsErrorBanner {
 pub struct BlockNotification {
     pub title: String,
     pub body: String,
+    /// Sent for a background tab of a window that may be frontmost, so it must show even while
+    /// Warp is the active app.
+    pub show_while_app_active: bool,
 }
 
 /// The reason for sending/discovering the notification
@@ -970,6 +973,7 @@ impl NotificationsTrigger {
         BlockNotification {
             title: format!("{title_prefix}{title_suffix}"),
             body: format!("{body_prefix}{body_suffix}"),
+            show_while_app_active: false,
         }
     }
 }
@@ -13802,6 +13806,7 @@ impl TerminalView {
                     let notification = BlockNotification {
                         title: notification_title,
                         body: body.clone(),
+                        show_while_app_active: false,
                     };
                     ctx.emit(Event::SendNotification(notification));
                 } else {
@@ -14171,6 +14176,32 @@ impl TerminalView {
             return;
         }
 
+        // Meter events can outlive the session (e.g. a status line repainted as Claude Code
+        // exits), so they must not start one.
+        let is_meters_only_event = match notification.event {
+            CLIAgentEventType::StatusLine
+            | CLIAgentEventType::PreCompact
+            | CLIAgentEventType::PostCompact => true,
+            CLIAgentEventType::SessionStart
+            | CLIAgentEventType::PromptSubmit
+            | CLIAgentEventType::ToolComplete
+            | CLIAgentEventType::Stop
+            | CLIAgentEventType::StopFailure
+            | CLIAgentEventType::PermissionRequest
+            | CLIAgentEventType::PermissionReplied
+            | CLIAgentEventType::QuestionAsked
+            | CLIAgentEventType::IdlePrompt
+            | CLIAgentEventType::NeedsInput
+            | CLIAgentEventType::Unknown(_) => false,
+        };
+        if is_meters_only_event
+            && CLIAgentSessionsModel::as_ref(ctx)
+                .session(self.view_id)
+                .is_none()
+        {
+            return;
+        }
+
         if !self.register_cli_agent_listener_from_event(&notification, ctx) {
             return;
         }
@@ -14458,10 +14489,11 @@ impl TerminalView {
         }
 
         // Desktop notifications — only when the session is out of view and not in-progress. With
-        // many agent tabs in one window, "out of view" includes another tab or pane having focus.
-        let is_in_unfocused_tab_or_pane = *AISettings::as_ref(ctx).notify_cli_agent_background_tabs
-            && !ctx.is_self_or_child_focused();
-        if !(self.is_navigated_away_from_window(ctx) || is_in_unfocused_tab_or_pane)
+        // many agent tabs in one window, "out of view" includes sitting in a background tab; a
+        // split pane of the active tab is still on screen.
+        let is_in_background_tab = *AISettings::as_ref(ctx).notify_cli_agent_background_tabs
+            && self.is_in_active_tab(ctx) == Some(false);
+        if !(self.is_navigated_away_from_window(ctx) || is_in_background_tab)
             || matches!(status, CLIAgentSessionStatus::InProgress)
         {
             return;
@@ -14492,6 +14524,7 @@ impl TerminalView {
             title,
             description,
             Some(NotificationAgentVariant::CLIAgent(*agent)),
+            is_in_background_tab,
             ctx,
         );
     }
@@ -16913,6 +16946,7 @@ impl TerminalView {
             block_summary.title,
             block_summary.description,
             Some(NotificationAgentVariant::Oz),
+            false,
             ctx,
         );
     }
@@ -16925,6 +16959,7 @@ impl TerminalView {
         title: String,
         description: String,
         agent_variant: Option<NotificationAgentVariant>,
+        show_while_app_active: bool,
         ctx: &mut ViewContext<Self>,
     ) {
         let notification_settings = SessionSettings::as_ref(ctx).notifications.value().clone();
@@ -16951,7 +16986,10 @@ impl TerminalView {
                 } else if !notification_settings.is_needs_attention_enabled {
                     return;
                 }
-                let notification_content = trigger.create_notification_content(title, description);
+                let notification_content = BlockNotification {
+                    show_while_app_active,
+                    ..trigger.create_notification_content(title, description)
+                };
                 ctx.emit(Event::SendNotification(notification_content));
                 send_telemetry_from_ctx!(
                     TelemetryEvent::NotificationSent {
@@ -22669,6 +22707,19 @@ impl TerminalView {
         );
 
         ctx.notify();
+    }
+
+    /// Whether this terminal is in the active tab of its window. `None` when that cannot be read,
+    /// e.g. while the workspace or the tab is mid-update.
+    fn is_in_active_tab(&self, ctx: &AppContext) -> Option<bool> {
+        let workspace = WorkspaceRegistry::as_ref(ctx).get(self.window_id, ctx)?;
+        let workspace = workspace.try_as_ref(ctx)?;
+        let active_tab = workspace.get_pane_group_view(workspace.active_tab_index())?;
+        Some(
+            active_tab
+                .try_as_ref(ctx)?
+                .contains_terminal_view(self.view_id, ctx),
+        )
     }
 
     fn is_navigated_away_from_window(&self, ctx: &mut ViewContext<Self>) -> bool {
