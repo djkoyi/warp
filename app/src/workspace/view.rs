@@ -4155,6 +4155,16 @@ impl Workspace {
             } => {
                 self.configure_empty_workspace(previous_active_window, shell, ctx);
             }
+            // CSS fork: a window whose only saved content is one plain terminal (no Claude
+            // conversation to resume) starts with Claude, like a window with nothing to restore.
+            NewWorkspaceSource::Restored {
+                ref window_snapshot,
+                ..
+            } if *TabSettings::as_ref(ctx).claude_open_on_new_window.value()
+                && is_lone_plain_terminal(window_snapshot) =>
+            {
+                self.configure_empty_workspace(None, None, ctx);
+            }
             NewWorkspaceSource::Restored {
                 window_snapshot,
                 block_lists,
