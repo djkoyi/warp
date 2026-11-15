@@ -13,8 +13,9 @@ pub const LABEL_PREFIX: &str = "pa.gob.css.warp.claude-task.";
 const MAX_CALENDAR_ENTRIES: usize = 1000;
 
 /// `$1` is the project directory and `$2` the prompt: user text reaches the shell only as
-/// positional parameters, never as script text.
-const RUNNER_SCRIPT: &str = "cd -- \"$1\" && exec \"$3\" \"$4\" -p \"$2\"";
+/// positional parameters, never as script text. `--` keeps a prompt starting with `-` from being
+/// read as an option.
+const RUNNER_SCRIPT: &str = "cd -- \"$1\" && exec \"$3\" \"$4\" -p -- \"$2\"";
 
 /// A plist ready to be written to `~/Library/LaunchAgents`.
 #[derive(Debug, PartialEq, Eq)]
@@ -84,33 +85,30 @@ fn slug(name: &str) -> String {
 
 type CalendarEntry = Vec<(&'static str, u32)>;
 
-/// Expands a schedule into `StartCalendarInterval` dictionaries. Wildcard fields are omitted, as
-/// launchd treats a missing key as "every". Restricted day-of-month and day-of-week fields get
-/// separate entries so the union reproduces cron's "either day field" rule.
+/// Expands a schedule into `StartCalendarInterval` dictionaries. Fields allowing every value are
+/// omitted, as launchd treats a missing key as "every". launchd ANDs the keys of one dictionary,
+/// so when [`Schedule::matches`] ORs the day fields they get separate entries whose union
+/// reproduces that rule.
 pub fn calendar_entries(schedule: &Schedule) -> Result<Vec<CalendarEntry>, String> {
     let time_fields = [
         ("Minute", &schedule.minute),
         ("Hour", &schedule.hour),
         ("Month", &schedule.month),
     ];
-    let day_variants: Vec<Vec<(&'static str, &CronField)>> = match (
-        schedule.day_of_month.is_wildcard(),
-        schedule.day_of_week.is_wildcard(),
-    ) {
-        (true, true) => vec![vec![]],
-        (false, true) => vec![vec![("Day", &schedule.day_of_month)]],
-        (true, false) => vec![vec![("Weekday", &schedule.day_of_week)]],
-        (false, false) => vec![
-            vec![("Day", &schedule.day_of_month)],
-            vec![("Weekday", &schedule.day_of_week)],
-        ],
-    };
+    let day_of_month = ("Day", &schedule.day_of_month);
+    let day_of_week = ("Weekday", &schedule.day_of_week);
+    let day_variants: Vec<Vec<(&'static str, &CronField)>> =
+        if schedule.day_of_month.is_wildcard() || schedule.day_of_week.is_wildcard() {
+            vec![vec![day_of_month, day_of_week]]
+        } else {
+            vec![vec![day_of_month], vec![day_of_week]]
+        };
 
     let mut entries = Vec::new();
     for day_fields in day_variants {
         let mut partial: Vec<CalendarEntry> = vec![vec![]];
         for (key, field) in time_fields.iter().copied().chain(day_fields) {
-            if field.is_wildcard() {
+            if field.is_full() {
                 continue;
             }
             let values = field.values();
@@ -225,12 +223,13 @@ fn render_plist(
     out
 }
 
-/// Writes the agents, replaces previously installed ones and loads them with `launchctl`.
-/// Returns how many agents were loaded.
+/// Writes the agents, replaces previously installed ones and bootstraps them into the user's GUI
+/// domain with `launchctl`. Returns how many agents were bootstrapped.
 #[cfg(target_os = "macos")]
 pub fn install(agents: &[LaunchAgent], home: &Path) -> Result<usize, String> {
     use std::process::Command;
 
+    let domain = format!("gui/{}", nix::unistd::getuid());
     let dir = launch_agents_dir(home);
     std::fs::create_dir_all(&dir).map_err(|err| format!("{}: {err}", dir.display()))?;
     let logs = home.join("Library/Logs/warp-claude-tasks");
@@ -239,10 +238,16 @@ pub fn install(agents: &[LaunchAgent], home: &Path) -> Result<usize, String> {
     let entries = std::fs::read_dir(&dir).map_err(|err| format!("{}: {err}", dir.display()))?;
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with(LABEL_PREFIX) && name.ends_with(".plist") {
+        if let Some(label) = name
+            .strip_suffix(".plist")
+            .filter(|label| label.starts_with(LABEL_PREFIX))
+        {
             let path = entry.path();
-            // A failed unload just means the agent wasn't loaded.
-            let _ = Command::new("launchctl").arg("unload").arg(&path).output();
+            // A failed bootout just means the agent wasn't loaded.
+            let _ = Command::new("launchctl")
+                .arg("bootout")
+                .arg(format!("{domain}/{label}"))
+                .output();
             std::fs::remove_file(&path).map_err(|err| format!("{}: {err}", path.display()))?;
         }
     }
@@ -250,15 +255,20 @@ pub fn install(agents: &[LaunchAgent], home: &Path) -> Result<usize, String> {
     for agent in agents {
         let path = plist_path(home, &agent.label);
         std::fs::write(&path, &agent.plist).map_err(|err| format!("{}: {err}", path.display()))?;
+        // Replaces `load -w`: clears a disabled override left by an earlier `unload -w`.
+        let _ = Command::new("launchctl")
+            .arg("enable")
+            .arg(format!("{domain}/{}", agent.label))
+            .output();
         let output = Command::new("launchctl")
-            .arg("load")
-            .arg("-w")
+            .arg("bootstrap")
+            .arg(&domain)
             .arg(&path)
             .output()
             .map_err(|err| format!("launchctl: {err}"))?;
         if !output.status.success() {
             return Err(format!(
-                "launchctl load {}: {}",
+                "launchctl bootstrap {domain} {}: {}",
                 path.display(),
                 String::from_utf8_lossy(&output.stderr).trim()
             ));

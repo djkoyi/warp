@@ -49,6 +49,11 @@ fn explicit_http_on_db_port_is_kept() {
 }
 
 #[test]
+fn port_must_end_at_a_word_boundary() {
+    assert!(extract_dev_server_urls("localhost:123456 and localhost:3000abc").is_empty());
+}
+
+#[test]
 fn origin_strips_path() {
     assert_eq!(
         url_origin("http://localhost:5173/a/b"),

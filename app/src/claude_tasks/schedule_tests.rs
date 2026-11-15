@@ -59,6 +59,15 @@ fn cron_restricted_day_fields_are_ored() {
 }
 
 #[test]
+fn cron_stepped_wildcard_day_field_is_anded() {
+    // `*/2` counts as `*` for the OR rule, as in Vixie cron: odd days that are also Mondays.
+    let schedule = Schedule::parse("0 12 */2 * 1").unwrap();
+    assert!(schedule.matches(&at(0, 12, 3, 3, 1)));
+    assert!(!schedule.matches(&at(0, 12, 4, 3, 1)), "even day");
+    assert!(!schedule.matches(&at(0, 12, 3, 3, 2)), "not Monday");
+}
+
+#[test]
 fn cron_start_with_step() {
     let schedule = Schedule::parse("5/20 * * * *").unwrap();
     assert_eq!(schedule.minute.values(), vec![5, 25, 45]);

@@ -153,8 +153,15 @@ pub fn handle_workspace_action(
             view_toast(DismissibleToast::default(scheduled_tasks_summary(ctx)), ctx);
         }
         ClaudeTasksAction::RunScheduledTasksNow => {
-            let started = ClaudeTaskScheduler::handle(ctx)
-                .update(ctx, |scheduler, ctx| scheduler.run_all_now(ctx));
+            let tasks = ClaudeTasksSettings::as_ref(ctx)
+                .scheduled_tasks
+                .value()
+                .clone();
+            let started = tasks
+                .iter()
+                .filter(|task| task.enabled)
+                .filter(|task| scheduler::open_task_tab(workspace, task, ctx))
+                .count();
             if started == 0 {
                 view_toast(
                     DismissibleToast::default(

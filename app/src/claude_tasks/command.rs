@@ -1,8 +1,8 @@
 //! Builds the shell command lines typed into new panes.
 //!
 //! Panes run an interactive shell, so the command has to be a single line of shell text. Every
-//! piece of user data goes through `shell_words::quote` as its own argument and is never spliced
-//! into the command unquoted. The resulting single-quoted form is valid in zsh, bash and fish.
+//! piece of user data goes through `quote` as its own argument and is never spliced into the
+//! command unquoted. The quoted form means the same in zsh, bash and fish.
 
 use std::path::{Path, PathBuf};
 
@@ -25,20 +25,38 @@ pub fn single_line_prompt(prompt: &str) -> String {
         .join(" ")
 }
 
-fn cd_prefix(dir: &Path) -> String {
-    shell_words::join(["cd", "--", &dir.to_string_lossy()])
+/// Quotes `word` as one literal argument for zsh, bash and fish.
+///
+/// `shell_words::quote` is not enough: fish also interprets `\\` inside single quotes. Quotes and
+/// backslashes are therefore emitted outside the single-quoted runs as `\'` and `\\`, which all
+/// three shells read the same way.
+fn quote(word: &str) -> String {
+    let mut quoted = String::with_capacity(word.len() + 2);
+    quoted.push('\'');
+    for c in word.chars() {
+        match c {
+            '\'' => quoted.push_str(r"'\''"),
+            '\\' => quoted.push_str(r"'\\'"),
+            c => quoted.push(c),
+        }
+    }
+    quoted.push('\'');
+    quoted
 }
 
-/// `cd -- <dir> && claude --dangerously-skip-permissions -p <prompt>`. The `cd` guard keeps the
-/// command from running in the wrong directory if the pane started elsewhere.
+fn cd_prefix(dir: &Path) -> String {
+    format!("cd -- {}", quote(&dir.to_string_lossy()))
+}
+
+/// `cd -- <dir> && claude --dangerously-skip-permissions -p -- <prompt>`. The `cd` guard keeps
+/// the command from running in the wrong directory if the pane started elsewhere, and `--` keeps
+/// a prompt that starts with `-` from being read as an option.
 pub fn claude_task_command(dir: &Path, prompt: &str) -> String {
-    let claude = shell_words::join([
-        CLAUDE_BINARY,
-        SKIP_PERMISSIONS_FLAG,
-        "-p",
-        &single_line_prompt(prompt),
-    ]);
-    format!("{} && {claude}", cd_prefix(dir))
+    format!(
+        "{} && {CLAUDE_BINARY} {SKIP_PERMISSIONS_FLAG} -p -- {}",
+        cd_prefix(dir),
+        quote(&single_line_prompt(prompt))
+    )
 }
 
 /// `cd -- <dir> && <command>`. The preview command is the user's own shell code, so it is kept

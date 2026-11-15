@@ -25,11 +25,15 @@ impl ScheduleTime {
     }
 }
 
-/// One cron field: the set of allowed values as a bitmask, and whether it was written as `*`.
+/// One cron field: the set of allowed values as a bitmask.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CronField {
     bits: u64,
+    /// Written starting with `*` (`*` or `*/n`). Vixie cron uses this, not the allowed values, to
+    /// pick between OR and AND for the two day fields.
     is_wildcard: bool,
+    /// Allows every value of the field's range, so launchd can omit the key.
+    is_full: bool,
 }
 
 impl CronField {
@@ -37,6 +41,7 @@ impl CronField {
         Self {
             bits: 1 << value,
             is_wildcard: false,
+            is_full: false,
         }
     }
 
@@ -44,6 +49,7 @@ impl CronField {
         Self {
             bits: range_bits(min, max, 1),
             is_wildcard: true,
+            is_full: true,
         }
     }
 
@@ -53,6 +59,10 @@ impl CronField {
 
     pub fn is_wildcard(&self) -> bool {
         self.is_wildcard
+    }
+
+    pub fn is_full(&self) -> bool {
+        self.is_full
     }
 
     /// Allowed values in ascending order.
@@ -86,6 +96,7 @@ impl Schedule {
                     CronField {
                         bits: range_bits(1, 5, 1),
                         is_wildcard: false,
+                        is_full: false,
                     },
                 ),
                 _ => Err(format!("horario no reconocido: \"{spec}\"")),
@@ -96,6 +107,7 @@ impl Schedule {
                 if day_of_week.contains(7) {
                     day_of_week.bits = (day_of_week.bits & !(1 << 7)) | 1;
                 }
+                day_of_week.is_full = day_of_week.bits == range_bits(0, 6, 1);
                 Ok(Self {
                     minute: parse_field(minute, 0, 59)?,
                     hour: parse_field(hour, 0, 23)?,
@@ -142,15 +154,12 @@ impl Schedule {
         }
         let dom = self.day_of_month.contains(time.day_of_month);
         let dow = self.day_of_week.contains(time.day_of_week);
-        // Standard cron: when both day fields are restricted, either one may match.
-        match (
-            self.day_of_month.is_wildcard(),
-            self.day_of_week.is_wildcard(),
-        ) {
-            (false, false) => dom || dow,
-            (true, false) => dow,
-            (false, true) => dom,
-            (true, true) => true,
+        // Vixie cron: when neither day field starts with `*`, either one may match; otherwise
+        // both must.
+        if self.day_of_month.is_wildcard() || self.day_of_week.is_wildcard() {
+            dom && dow
+        } else {
+            dom || dow
         }
     }
 }
@@ -204,7 +213,8 @@ fn parse_field(field: &str, min: u32, max: u32) -> Result<CronField, String> {
     }
     Ok(CronField {
         bits,
-        is_wildcard: false,
+        is_wildcard: field.starts_with('*'),
+        is_full: bits == range_bits(min, max, 1),
     })
 }
 

@@ -30,7 +30,7 @@ const NON_HTTP_PORTS: &[u16] = &[1433, 1521, 3306, 5432, 6379, 9200, 11211, 2701
 
 lazy_static! {
     static ref LOCAL_URL: Regex = Regex::new(
-        r"(?i)(https?://)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):(\d{2,5})(/[^\s'\x22<>()\[\]{}|\\^`]*)?"
+        r"(?i)(https?://)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]):(\d{2,5})\b(/[^\s'\x22<>()\[\]{}|\\^`]*)?"
     )
     .expect("valid regex");
 }
@@ -190,9 +190,10 @@ impl PreviewDetector {
                 .all_workspaces(ctx)
                 .into_iter()
                 .filter_map(|(window_id, workspace)| {
+                    // Polling can land while a window is mid-teardown with no tabs left.
+                    let workspace = workspace.as_ref(ctx);
                     let view = workspace
-                        .as_ref(ctx)
-                        .active_tab_pane_group()
+                        .get_pane_group_view(workspace.active_tab_index())?
                         .as_ref(ctx)
                         .focused_session_view(ctx)?;
                     Some((window_id, view))

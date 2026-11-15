@@ -5,14 +5,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ::settings::Setting as _;
-use chrono::Local;
+use chrono::{DateTime, Local};
 use warpui::r#async::Timer;
-use warpui::{Entity, ModelContext, SingletonEntity, ViewHandle, WindowId};
+use warpui::{Entity, ModelContext, SingletonEntity, ViewContext, ViewHandle, WindowId};
 
 use super::command::{claude_task_command, expand_dir};
 use super::schedule::{Schedule, ScheduleTime};
 use super::settings::{ClaudeTasksSettings, ScheduledTask};
-use super::show_toast;
+use super::{show_toast, view_toast};
 use crate::launch_configs::launch_config::{CommandTemplate, PaneMode, PaneTemplateType};
 use crate::pane_group::PanesLayout;
 use crate::view_components::DismissibleToast;
@@ -21,9 +21,14 @@ use crate::workspace::{Workspace, WorkspaceAction, WorkspaceRegistry};
 /// Shorter than a minute so every calendar minute is observed at least once.
 const TICK_INTERVAL: Duration = Duration::from_secs(20);
 
+/// Most minutes a late tick (e.g. after the machine slept) evaluates, counting the current one.
+const MAX_CATCH_UP_MINUTES: i64 = 10;
+
 pub struct ClaudeTaskScheduler {
     /// Minute (Unix minutes) each task last fired in, so a minute observed twice fires once.
     last_fired: HashMap<String, i64>,
+    /// Minute (Unix minutes) of the previous tick, so minutes skipped by a late timer still fire.
+    last_tick_minute: Option<i64>,
     reported_invalid: HashSet<String>,
 }
 
@@ -32,6 +37,7 @@ impl ClaudeTaskScheduler {
         Self::schedule_tick(ctx);
         Self {
             last_fired: HashMap::new(),
+            last_tick_minute: None,
             reported_invalid: HashSet::new(),
         }
     }
@@ -44,14 +50,21 @@ impl ClaudeTaskScheduler {
     }
 
     fn tick(&mut self, ctx: &mut ModelContext<Self>) {
+        let minute = Local::now().timestamp().div_euclid(60);
+        let first_minute = pending_minutes_start(self.last_tick_minute, minute);
+        self.last_tick_minute = Some(minute);
+
         let settings = ClaudeTasksSettings::as_ref(ctx);
         if !*settings.scheduled_tasks_enabled.value() {
             return;
         }
         let tasks = settings.scheduled_tasks.value().clone();
-        let now = Local::now();
-        let minute = now.timestamp().div_euclid(60);
-        let time = ScheduleTime::from_datetime(&now);
+        let times: Vec<(i64, ScheduleTime)> = (first_minute..=minute)
+            .filter_map(|minute| {
+                let time = DateTime::from_timestamp(minute * 60, 0)?.with_timezone(&Local);
+                Some((minute, ScheduleTime::from_datetime(&time)))
+            })
+            .collect();
 
         for task in tasks.iter().filter(|task| task.enabled && !task.launchd) {
             let schedule = match Schedule::parse(&task.schedule) {
@@ -73,25 +86,30 @@ impl ClaudeTaskScheduler {
                     continue;
                 }
             };
-            if !schedule.matches(&time) || self.last_fired.get(&task.key()) == Some(&minute) {
+            let last_fired = self.last_fired.get(&task.key()).copied();
+            // Several skipped minutes may match; the task still runs only once per tick.
+            let Some(due_minute) = times
+                .iter()
+                .rev()
+                .find(|(minute, time)| {
+                    schedule.matches(time) && last_fired.is_none_or(|last| last < *minute)
+                })
+                .map(|(minute, _)| *minute)
+            else {
                 continue;
-            }
-            self.last_fired.insert(task.key(), minute);
+            };
+            self.last_fired.insert(task.key(), due_minute);
             run_task(task, ctx);
         }
     }
+}
 
-    /// Runs every enabled task now, regardless of schedule. Returns how many were started.
-    pub fn run_all_now(&mut self, ctx: &mut ModelContext<Self>) -> usize {
-        let tasks = ClaudeTasksSettings::as_ref(ctx)
-            .scheduled_tasks
-            .value()
-            .clone();
-        tasks
-            .iter()
-            .filter(|task| task.enabled)
-            .filter(|task| run_task(task, ctx))
-            .count()
+/// First minute a tick at `minute` must evaluate: the ones since the previous tick, capped at
+/// [`MAX_CATCH_UP_MINUTES`]. A clock that moved backwards evaluates only the current minute.
+pub(super) fn pending_minutes_start(last_tick_minute: Option<i64>, minute: i64) -> i64 {
+    match last_tick_minute {
+        Some(last) if last < minute => (last + 1).max(minute - MAX_CATCH_UP_MINUTES + 1),
+        Some(_) | None => minute,
     }
 }
 
@@ -117,15 +135,35 @@ fn notify(toast: DismissibleToast<WorkspaceAction>, ctx: &mut ModelContext<Claud
     }
 }
 
+fn run_task(task: &ScheduledTask, ctx: &mut ModelContext<ClaudeTaskScheduler>) {
+    let Some((_, workspace)) = target_window(ctx) else {
+        log::warn!(
+            "Scheduled task {:?} skipped: no Warp window is open",
+            task.name
+        );
+        return;
+    };
+    workspace.update(ctx, |workspace, ctx| {
+        open_task_tab(workspace, task, ctx);
+    });
+}
+
 /// Opens a tab in the task's project and runs it there. Returns whether the tab was opened.
-fn run_task(task: &ScheduledTask, ctx: &mut ModelContext<ClaudeTaskScheduler>) -> bool {
+///
+/// Takes the workspace directly so callers already inside a `Workspace` update (e.g. its own
+/// action handler) never update it again through its handle, which panics.
+pub(super) fn open_task_tab(
+    workspace: &mut Workspace,
+    task: &ScheduledTask,
+    ctx: &mut ViewContext<Workspace>,
+) -> bool {
     let dir = expand_dir(&task.project_dir);
     if !dir.is_dir() {
         log::warn!(
             "Scheduled task {:?} skipped: missing project dir",
             task.name
         );
-        notify(
+        view_toast(
             DismissibleToast::error(format!(
                 "Tarea \"{}\" omitida: no existe {}",
                 task.name,
@@ -135,45 +173,37 @@ fn run_task(task: &ScheduledTask, ctx: &mut ModelContext<ClaudeTaskScheduler>) -
         );
         return false;
     }
-    let Some((window_id, workspace)) = target_window(ctx) else {
-        log::warn!(
-            "Scheduled task {:?} skipped: no Warp window is open",
-            task.name
-        );
-        return false;
-    };
 
     let command = claude_task_command(&dir, &task.prompt);
-    let focus = task.focus;
-    let title = format!("Tarea: {}", task.name);
-    workspace.update(ctx, |workspace, ctx| {
-        let previous_tab = workspace.active_tab_pane_group().id();
-        workspace.add_tab_with_pane_layout(
-            PanesLayout::Template(PaneTemplateType::PaneTemplate {
-                cwd: dir,
-                commands: vec![CommandTemplate { exec: command }],
-                is_focused: Some(true),
-                pane_mode: PaneMode::Terminal,
-                shell: None,
-            }),
-            Arc::new(HashMap::new()),
-            Some(title),
-            ctx,
-        );
-        if !focus
-            && let Some(index) = (0..workspace.tab_count()).find(|index| {
-                workspace
-                    .get_pane_group_view(*index)
-                    .is_some_and(|pane_group| pane_group.id() == previous_tab)
-            })
-        {
-            workspace.activate_tab(index, ctx);
-        }
-    });
-    show_toast(
+    let previous_tab = workspace.active_tab_pane_group().id();
+    workspace.add_tab_with_pane_layout(
+        PanesLayout::Template(PaneTemplateType::PaneTemplate {
+            cwd: dir,
+            commands: vec![CommandTemplate { exec: command }],
+            is_focused: Some(true),
+            pane_mode: PaneMode::Terminal,
+            shell: None,
+        }),
+        Arc::new(HashMap::new()),
+        Some(format!("Tarea: {}", task.name)),
+        ctx,
+    );
+    if !task.focus
+        && let Some(index) = (0..workspace.tab_count()).find(|index| {
+            workspace
+                .get_pane_group_view(*index)
+                .is_some_and(|pane_group| pane_group.id() == previous_tab)
+        })
+    {
+        workspace.activate_tab(index, ctx);
+    }
+    view_toast(
         DismissibleToast::success(format!("Tarea programada iniciada: {}", task.name)),
-        window_id,
         ctx,
     );
     true
 }
+
+#[cfg(test)]
+#[path = "scheduler_tests.rs"]
+mod tests;

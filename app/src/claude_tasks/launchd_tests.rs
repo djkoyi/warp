@@ -40,8 +40,20 @@ fn both_day_fields_produce_union() {
 }
 
 #[test]
+fn stepped_wildcard_day_field_is_anded_in_one_entry() {
+    let entries = calendar_entries(&Schedule::parse("0 12 */10 * 1").unwrap()).unwrap();
+    assert_eq!(
+        entries,
+        [1, 11, 21, 31]
+            .into_iter()
+            .map(|day| vec![("Minute", 0), ("Hour", 12), ("Day", day), ("Weekday", 1)])
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn too_many_entries_is_an_error() {
-    assert!(calendar_entries(&Schedule::parse("*/1 */1 * * *").unwrap()).is_err());
+    assert!(calendar_entries(&Schedule::parse("*/2 */2 1-30 * *").unwrap()).is_err());
 }
 
 #[test]
