@@ -395,6 +395,7 @@ impl View {
                 | (PaletteMode::LaunchConfig, QueryFilter::LaunchConfigurations)
                 | (PaletteMode::Files, QueryFilter::Files)
                 | (PaletteMode::Conversations, QueryFilter::Conversations)
+                | (PaletteMode::ClaudeSessions, QueryFilter::ClaudeSessions)
                 | (PaletteMode::WarpDrive, QueryFilter::Drive)
         )
     }
@@ -780,6 +781,11 @@ impl View {
                     self.set_active_query_filter(QueryFilter::Conversations, ctx);
                     return;
                 }
+                Some(WorkspaceAction::OpenClaudeSessionsPalette) => {
+                    self.reset(ctx);
+                    self.set_active_query_filter(QueryFilter::ClaudeSessions, ctx);
+                    return;
+                }
                 Some(WorkspaceAction::TogglePalette {
                     mode: PaletteMode::Command,
                     source: _,
@@ -869,6 +875,12 @@ impl View {
                     restore_layout: None,
                 });
                 send_telemetry_from_app_ctx!(TelemetryEvent::SelectNavigationPaletteItem, ctx);
+            }
+            CommandPaletteItemAction::ResumeClaudeSession { session_id, cwd } => {
+                ctx.dispatch_typed_action(&WorkspaceAction::ResumeClaudeSession {
+                    session_id,
+                    cwd,
+                });
             }
             CommandPaletteItemAction::ForkConversation { conversation_id } => {
                 ctx.dispatch_typed_action(&WorkspaceAction::ForkAIConversation {

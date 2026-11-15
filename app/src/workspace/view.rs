@@ -158,8 +158,8 @@ use super::rewind_confirmation_dialog::{
     RewindConfirmationDialog, RewindConfirmationEvent, RewindDialogSource,
 };
 use super::tab_settings::{
-    DirectoryTabColor, HeaderToolbarChipSelection, NewTabPlacement, TabSettings, TabSettingsChangedEvent,
-    VerticalTabsDisplayGranularity, WorkspaceDecorationVisibility,
+    DirectoryTabColor, HeaderToolbarChipSelection, NewTabPlacement, TabSettings,
+    TabSettingsChangedEvent, VerticalTabsDisplayGranularity, WorkspaceDecorationVisibility,
 };
 use super::util::{
     PaneViewLocator, TabMovement, TerminalSessionFallbackBehavior, WelcomeTipsViewState,
@@ -395,9 +395,10 @@ use crate::terminal::available_shells::AvailableShell;
 #[cfg(target_os = "windows")]
 use crate::terminal::available_shells::AvailableShells;
 use crate::terminal::block_list_viewport::InputMode;
+use crate::terminal::claude_code_resume::ClaudeCodeResume;
+use crate::terminal::cli_agent_sessions::meters_ui::{self, MeterSegment};
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{PluginModalKind, plugin_manager_for};
-use crate::terminal::cli_agent_sessions::meters_ui::{self, MeterSegment};
 use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
 use crate::terminal::enable_auto_reload_modal::{
     EnableAutoReloadModal, EnableAutoReloadModalEvent,
@@ -3841,8 +3842,8 @@ impl Workspace {
                     .insert(terminal_view_id, segments);
             }
             // Meter updates arrive with every status line repaint; most change nothing on the tab.
-            let skip_render = tab_unchanged
-                && matches!(event, CLIAgentSessionsModelEvent::MetersUpdated { .. });
+            let skip_render =
+                tab_unchanged && matches!(event, CLIAgentSessionsModelEvent::MetersUpdated { .. });
             if !skip_render {
                 ctx.notify();
             }
@@ -7117,6 +7118,16 @@ impl Workspace {
             }
         }
 
+        // 2b. Resume one of the user's recent Claude Code conversations in a new tab.
+        if ContextFlag::CreateNewSession.is_enabled() {
+            menu_items.push(
+                MenuItemFields::new("Retomar sesión de Claude…")
+                    .with_on_select_action(WorkspaceAction::OpenClaudeSessionsPalette)
+                    .with_icon(icons::Icon::ClaudeLogo)
+                    .into_item(),
+            );
+        }
+
         // 3. Cloud Agent (if flags enabled)
         if is_any_ai_enabled
             && FeatureFlag::AgentView.is_enabled()
@@ -7144,7 +7155,10 @@ impl Workspace {
 
         // CSS fork: tab configs, worktree configs, tab groups and "Reopen closed session" are
         // not offered here; this menu only opens Claude Code or a plain terminal.
-        let _ = (&default_tab_config_path, &reopen_closed_session_shortcut_label);
+        let _ = (
+            &default_tab_config_path,
+            &reopen_closed_session_shortcut_label,
+        );
 
         menu_items
     }
@@ -12794,6 +12808,43 @@ impl Workspace {
         );
     }
 
+    /// Opens a new tab in `cwd` running `claude --resume <session_id>` plus the configured resume
+    /// flags. The directory travels as the pane's path, never on the command line.
+    fn resume_claude_session(&mut self, session_id: &str, cwd: &str, ctx: &mut ViewContext<Self>) {
+        let Some(resume) = ClaudeCodeResume::from_persisted(Some(session_id.to_string()), None)
+        else {
+            log::warn!("Ignoring Claude Code resume with an invalid session id");
+            return;
+        };
+        let shell_type = self
+            .active_session_view(ctx)
+            .and_then(|view| view.as_ref(ctx).active_session_shell_type(ctx))
+            .or_else(|| {
+                std::env::var("SHELL")
+                    .ok()
+                    .and_then(|shell| ShellType::from_name(&shell))
+            })
+            .unwrap_or(ShellType::Zsh);
+        let flags = GeneralSettings::as_ref(ctx)
+            .claude_code_resume_flags
+            .value()
+            .clone();
+        let command = resume.command(&flags, shell_type);
+        let cwd = PathBuf::from(cwd);
+        let cwd = if cwd.is_absolute() && cwd.is_dir() {
+            cwd
+        } else {
+            log::warn!("Claude Code session directory is gone; opening the default directory");
+            PathBuf::new()
+        };
+        self.add_tab_with_pane_layout(
+            PanesLayout::Template(claude_tabs::claude_pane_template(cwd, &command)),
+            Arc::new(HashMap::new()),
+            None,
+            ctx,
+        );
+    }
+
     fn add_docker_sandbox_tab(&mut self, ctx: &mut ViewContext<Self>) {
         self.add_docker_sandbox_tab_with_shared_session_creator(IsSharedSessionCreator::No, ctx);
     }
@@ -14801,6 +14852,15 @@ impl Workspace {
         ctx.notify();
     }
 
+    fn open_claude_sessions_palette(&mut self, ctx: &mut ViewContext<Self>) {
+        self.palette.update(ctx, |view, ctx| {
+            view.reset(ctx);
+            view.set_active_query_filter(QueryFilter::ClaudeSessions, ctx);
+            view.set_initial_selection_offset(0, ctx);
+        });
+        ctx.notify();
+    }
+
     fn open_ctrl_tab_palette(
         &mut self,
         query_filter: QueryFilter,
@@ -15037,6 +15097,7 @@ impl Workspace {
             PaletteMode::WarpDrive => self.open_warp_drive_palette(ctx),
             PaletteMode::Files => self.open_files_palette(ctx),
             PaletteMode::Conversations => self.open_conversations_palette(ctx),
+            PaletteMode::ClaudeSessions => self.open_claude_sessions_palette(ctx),
         }
 
         ctx.focus(&self.palette);
@@ -23411,11 +23472,15 @@ impl Workspace {
         }
 
         if *general_settings.claude_code_auto_resume {
-            context.set.insert(flags::CLAUDE_CODE_AUTO_RESUME_CONTEXT_FLAG);
+            context
+                .set
+                .insert(flags::CLAUDE_CODE_AUTO_RESUME_CONTEXT_FLAG);
         }
 
         if *general_settings.claude_code_resume_ask_first {
-            context.set.insert(flags::CLAUDE_CODE_RESUME_ASK_FIRST_CONTEXT_FLAG);
+            context
+                .set
+                .insert(flags::CLAUDE_CODE_RESUME_ASK_FIRST_CONTEXT_FLAG);
         }
 
         if *session_settings.honor_ps1 {
@@ -24547,6 +24612,15 @@ impl TypedActionView for Workspace {
             AddAgentTab => self.add_terminal_tab_with_new_agent_view(ctx),
             AddDockerSandboxTab => self.add_docker_sandbox_tab(ctx),
             AddClaudeTabHere => self.add_claude_tab_here(ctx),
+            OpenClaudeSessionsPalette => self.open_palette_action(
+                PaletteMode::ClaudeSessions,
+                PaletteSource::NewSessionMenu,
+                None,
+                ctx,
+            ),
+            ResumeClaudeSession { session_id, cwd } => {
+                self.resume_claude_session(session_id, cwd, ctx)
+            }
             StartAgentOnboardingTutorial(tutorial) => {
                 self.start_agent_onboarding_tutorial(tutorial.clone(), ctx)
             }

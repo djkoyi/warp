@@ -6,7 +6,7 @@ use warp_core::features::FeatureFlag;
 use warpui::keymap::BindingId;
 use warpui::{AppContext, Entity, ModelContext, ModelHandle, SingletonEntity, WindowId};
 
-use super::{conversations, warp_drive};
+use super::{claude_sessions, conversations, warp_drive};
 use crate::drive::settings::WarpDriveSettings;
 use crate::search::QueryFilter;
 use crate::search::action::CommandBindingDataSource;
@@ -30,6 +30,7 @@ pub struct DataSourceStore {
     new_session_data_source: Option<ModelHandle<NewSessionDataSource>>,
     all_conversation_data_source: ModelHandle<conversations::DataSource>,
     repo_data_source: ModelHandle<RepoDataSource>,
+    claude_sessions_data_source: ModelHandle<claude_sessions::DataSource>,
     tabs_data_source: Option<ModelHandle<tabs::DataSource>>,
 }
 
@@ -60,6 +61,8 @@ impl DataSourceStore {
 
         let repo_data_source = ctx.add_model(|_| RepoDataSource::new());
 
+        let claude_sessions_data_source = ctx.add_model(|_| claude_sessions::DataSource::new());
+
         Self {
             actions_data_source,
             sessions_data_source,
@@ -68,6 +71,7 @@ impl DataSourceStore {
             new_session_data_source,
             all_conversation_data_source,
             repo_data_source,
+            claude_sessions_data_source,
             tabs_data_source: None,
         }
     }
@@ -154,6 +158,19 @@ impl DataSourceStore {
             mixer.add_sync_source(
                 self.repo_data_source.clone(),
                 HashSet::from([QueryFilter::Repos]),
+            );
+
+            // Only listed when the palette is opened filtered to Claude sessions: reading
+            // transcripts on every unfiltered keystroke would be wasted work.
+            mixer.add_async_source(
+                self.claude_sessions_data_source.clone(),
+                HashSet::from([QueryFilter::ClaudeSessions]),
+                AddAsyncSourceOptions {
+                    debounce_interval: None,
+                    run_in_zero_state: true,
+                    run_when_unfiltered: false,
+                },
+                ctx,
             );
 
             ctx.notify();

@@ -261,6 +261,13 @@ pub enum WorkspaceAction {
     AddDockerSandboxTab,
     /// Add a new tab in the active session's directory that runs the configured Claude command.
     AddClaudeTabHere,
+    /// Open the command palette listing recent Claude Code conversations to resume one.
+    OpenClaudeSessionsPalette,
+    /// Add a new tab in `cwd` that resumes the Claude Code conversation `session_id`.
+    ResumeClaudeSession {
+        session_id: String,
+        cwd: String,
+    },
     OpenNewSessionMenu {
         anchor: NewSessionMenuAnchor,
     },
@@ -1019,6 +1026,7 @@ impl WorkspaceAction {
             | AddAmbientAgentTab
             | AddDockerSandboxTab
             | AddClaudeTabHere
+            | ResumeClaudeSession { .. }
             | AddWindow
             | AddWindowWithShell { .. }
             | CloseWindow
@@ -1057,6 +1065,7 @@ impl WorkspaceAction {
             | DecreaseZoom
             | ResetZoom
             | OpenPalette { .. }
+            | OpenClaudeSessionsPalette
             | TogglePalette { mode: _, source: _ }
             | ShowUpgrade
             | ShowReferralSettingsPage

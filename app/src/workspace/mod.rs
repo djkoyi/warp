@@ -2,9 +2,9 @@ mod action;
 mod active_session;
 pub(crate) mod auto_handoff;
 pub mod bonus_grant_notification_model;
+pub(crate) mod claude_tabs;
 #[cfg(feature = "local_fs")]
 pub(crate) mod claude_worktrees;
-pub(crate) mod claude_tabs;
 #[cfg(target_os = "macos")]
 pub(crate) mod cli_install;
 mod close_session_confirmation_dialog;
@@ -759,6 +759,13 @@ pub fn init(app: &mut AppContext) {
         )
         .with_context_predicate(id!("Workspace") & !id!("Workspace_PaneDragging"))
         .with_mac_key_binding("ctrl-cmd-c")
+        .with_enabled(|| ContextFlag::CreateNewSession.is_enabled()),
+        EditableBinding::new(
+            "workspace:resume_claude_session",
+            BindingDescription::new("Retomar sesión de Claude"),
+            WorkspaceAction::OpenClaudeSessionsPalette,
+        )
+        .with_context_predicate(id!("Workspace") & !id!("Workspace_PaneDragging"))
         .with_enabled(|| ContextFlag::CreateNewSession.is_enabled()),
         EditableBinding::new(
             NEW_AGENT_TAB_BINDING_NAME,

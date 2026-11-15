@@ -222,6 +222,9 @@ pub enum QueryFilter {
 
     /// Include only conversations whose most recent directory matches the session's current working directory.
     CurrentDirectoryConversations,
+
+    /// Filter results for the user's recent Claude Code conversations (resumable transcripts).
+    ClaudeSessions,
 }
 
 impl QueryFilter {
@@ -262,6 +265,7 @@ impl QueryFilter {
             QueryFilter::CurrentDirectoryConversations => {
                 "Search conversations in current directory"
             }
+            QueryFilter::ClaudeSessions => "Buscar sesiones de Claude",
         }
     }
 
@@ -294,6 +298,7 @@ impl QueryFilter {
             QueryFilter::BaseModels => &NO_FILTER_ATOM,
             QueryFilter::FullTerminalUseModels => &NO_FILTER_ATOM,
             QueryFilter::CurrentDirectoryConversations => &NO_FILTER_ATOM,
+            QueryFilter::ClaudeSessions => &NO_FILTER_ATOM,
         }
     }
 
@@ -326,6 +331,7 @@ impl QueryFilter {
             QueryFilter::BaseModels => "base models",
             QueryFilter::FullTerminalUseModels => "full terminal use models",
             QueryFilter::CurrentDirectoryConversations => "current directory conversations",
+            QueryFilter::ClaudeSessions => "sesiones de Claude",
         }
     }
 
@@ -365,6 +371,7 @@ impl QueryFilter {
             QueryFilter::BaseModels => None,
             QueryFilter::FullTerminalUseModels => None,
             QueryFilter::CurrentDirectoryConversations => None,
+            QueryFilter::ClaudeSessions => Some(Icon::ClaudeLogo.into()),
         }
     }
 }

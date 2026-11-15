@@ -81,6 +81,11 @@ pub enum CommandPaletteItemAction {
     },
     /// Start a new AI conversation
     NewConversation,
+    /// Resume a Claude Code conversation (`claude --resume`) in a new tab opened in `cwd`.
+    ResumeClaudeSession {
+        session_id: String,
+        cwd: String,
+    },
     /// No-op action (used for non-interactable separator items that don't do anything on click).
     NoOp,
 }
@@ -146,6 +151,8 @@ impl CommandPaletteItemAction {
                 ItemSummary::Project { path: path.clone() }
             }
             CommandPaletteItemAction::NewConversation => ItemSummary::NewConversation,
+            // Transcripts come and go outside Warp, so they are not kept as recent items.
+            CommandPaletteItemAction::ResumeClaudeSession { .. } => ItemSummary::NoOp,
             CommandPaletteItemAction::NoOp => ItemSummary::NoOp,
         }
     }

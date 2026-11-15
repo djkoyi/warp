@@ -417,7 +417,9 @@ pub enum CommandXRayTrigger {
 pub enum PaletteSource {
     PrefixChange,
     Keybinding,
-    CtrlTab { shift_pressed_initially: bool },
+    CtrlTab {
+        shift_pressed_initially: bool,
+    },
     WarpDrive,
     QuitModal,
     LogOutModal,
@@ -427,6 +429,8 @@ pub enum PaletteSource {
     PaneHeader,
     AgentTip,
     TitleBarSearchBar,
+    /// The new-session (`+`) menu of the tab bar.
+    NewSessionMenu,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]

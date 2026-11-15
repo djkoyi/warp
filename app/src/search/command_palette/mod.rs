@@ -1,3 +1,4 @@
+mod claude_sessions;
 pub mod conversations;
 mod data_sources;
 mod files;

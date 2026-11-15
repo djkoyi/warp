@@ -8,4 +8,6 @@ pub enum PaletteMode {
     WarpDrive,
     Files,
     Conversations,
+    /// The user's recent Claude Code conversations, to resume one in a new tab.
+    ClaudeSessions,
 }

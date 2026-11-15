@@ -159,7 +159,11 @@ fn scan_tail(file: &mut File) -> TailScan {
         return scan;
     }
     let mut buffer = Vec::new();
-    if Read::by_ref(file).take(TAIL_BYTES).read_to_end(&mut buffer).is_err() {
+    if Read::by_ref(file)
+        .take(TAIL_BYTES)
+        .read_to_end(&mut buffer)
+        .is_err()
+    {
         return scan;
     }
     let mut lines: Vec<&[u8]> = buffer.split(|byte| *byte == b'\n').collect();
@@ -287,10 +291,7 @@ pub fn relative_time_es(now: SystemTime, then: SystemTime) -> String {
     const WEEK: u64 = 7 * DAY;
     const MONTH: u64 = 30 * DAY;
 
-    let seconds = now
-        .duration_since(then)
-        .unwrap_or(Duration::ZERO)
-        .as_secs();
+    let seconds = now.duration_since(then).unwrap_or(Duration::ZERO).as_secs();
     match seconds {
         s if s < MINUTE => "ahora mismo".to_string(),
         s if s < HOUR => format!("hace {} min", s / MINUTE),
