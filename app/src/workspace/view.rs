@@ -21406,7 +21406,7 @@ impl Workspace {
             font_weight: Some(Weight::Medium),
             font_family_id: Some(ui_font_family),
             height: Some(24.),
-            background: Some(internal_colors::fg_overlay_1(theme)),
+            background: Some(internal_colors::fg_overlay_1(theme).into()),
             border_radius: Some(CornerRadius::with_all(Radius::Pixels(4.))),
             border_width: Some(0.),
             padding: Some(Coords {
