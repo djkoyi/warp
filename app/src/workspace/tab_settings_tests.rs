@@ -136,7 +136,7 @@ fn puente_status_script_defaults_to_configured_path() {
 
         TabSettings::handle(&app).read(&app, |settings, _ctx| {
             assert_eq!(
-                settings.puente_status_script.value(),
+                settings.puente_status_script.value().as_str(),
                 "/Users/franklrodriguez/RiderProjects/puente/bin/puente-list-json.sh"
             );
         });
