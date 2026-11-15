@@ -968,13 +968,21 @@ pub async fn get_pr_for_branch(repo_path: &Path, path_env: Option<&str>) -> Resu
 }
 
 /// Like [`get_pr_for_branch`], but also requests `statusCheckRollup` and summarizes the PR's CI
-/// checks. The summary is `None` when the PR reports no checks.
+/// checks. The summary is `None` when the PR reports no checks or they could not be read.
 #[cfg(feature = "local_fs")]
 pub async fn get_pr_with_checks_for_branch(
     repo_path: &Path,
     path_env: Option<&str>,
 ) -> Result<Option<(PrInfo, Option<PrChecksSummary>)>> {
-    fetch_pr_for_branch(repo_path, path_env, true).await
+    match fetch_pr_for_branch(repo_path, path_env, true).await {
+        Ok(result) => Ok(result),
+        // `statusCheckRollup` can fail on its own (e.g. a token without access to checks), which
+        // must not hide the PR itself.
+        Err(err) => {
+            log::debug!("gh pr view with checks failed, retrying without them: {err:#}");
+            fetch_pr_for_branch(repo_path, path_env, false).await
+        }
+    }
 }
 
 #[cfg(feature = "local_fs")]

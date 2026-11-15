@@ -14,7 +14,7 @@ use crate::view_components::DismissibleToast;
 use crate::workspace::claude_worktrees::{
     self, CLAUDE_WORKTREE_SESSION_COMMAND, CreatedClaudeWorktree,
 };
-use crate::workspace::{ToastStack, WorkspaceAction};
+use crate::workspace::{ToastStack, WorkspaceAction, WorkspaceRegistry};
 
 const NO_LOCAL_REPO_MESSAGE: &str = "La pestaña activa no tiene un directorio local. Abre una pestaña dentro de un repositorio git.";
 
@@ -112,6 +112,7 @@ impl Workspace {
             Some(format!("Claude · {}", created.name)),
             ctx,
         );
+        ctx.dispatch_global_action("workspace:save_app", ());
         Self::show_claude_worktree_toast(
             DismissibleToast::success(format!(
                 "Worktree {} creado en la rama {}",
@@ -129,8 +130,21 @@ impl Workspace {
             .and_then(|terminal_view| terminal_view.as_ref(ctx).active_session_path_if_local(ctx))
     }
 
-    /// Local working directories of every terminal in this window's tabs.
-    fn open_local_session_paths(&self, ctx: &AppContext) -> Vec<PathBuf> {
+    /// Local working directories of every terminal in every window's tabs.
+    fn open_local_session_paths(&self, ctx: &ViewContext<Self>) -> Vec<PathBuf> {
+        let current_window_id = ctx.window_id();
+        // This workspace is mid-update, so it is read through `self`: reading it through its
+        // handle from the registry would panic.
+        let mut paths = self.window_local_session_paths(ctx);
+        for (window_id, workspace) in WorkspaceRegistry::as_ref(ctx).all_workspaces(ctx) {
+            if window_id != current_window_id {
+                paths.extend(workspace.as_ref(ctx).window_local_session_paths(ctx));
+            }
+        }
+        paths
+    }
+
+    fn window_local_session_paths(&self, ctx: &AppContext) -> Vec<PathBuf> {
         self.tabs
             .iter()
             .flat_map(|tab| tab.pane_group.as_ref(ctx).terminal_views(ctx))

@@ -1266,7 +1266,8 @@ impl WorkspaceAction {
             InstallOz | UninstallOz => false,
             #[cfg(target_os = "macos")]
             InstallWarpctrl | UninstallWarpctrl => false,
-            // The worktree tab is added asynchronously, which saves state on its own.
+            // The worktree tab is added asynchronously; `open_claude_worktree_tab` saves state once
+            // it exists.
             NewClaudeWorktreeSession | ListClaudeWorktrees | CleanupClaudeWorktrees => false,
             #[cfg(feature = "local_fs")]
             FileRenamed { .. } => false, // File rename doesn't change workspace state

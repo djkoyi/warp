@@ -187,6 +187,14 @@ pub fn init(app: &mut AppContext) {
             id!("Terminal") & !id!("IMEOpen") & id!(CAN_FORK_FROM_LAST_KNOWN_GOOD_STATE_KEY),
         )]);
     }
+    if cfg!(all(target_os = "macos", feature = "local_fs")) {
+        // Twin of the cmd-alt-r review binding for when 'Option as meta' is enabled.
+        app.register_fixed_bindings([FixedBinding::new(
+            "cmd-meta-r",
+            TerminalAction::ReviewCliAgentChanges,
+            id!("Terminal") & !id!("IMEOpen"),
+        )]);
+    }
 
     // Register binding to toggle plans in agent conversations.
     {

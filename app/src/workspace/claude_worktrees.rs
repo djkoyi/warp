@@ -351,6 +351,7 @@ pub async fn cleanup_claude_worktrees(
     let path_env = path_env.as_deref();
     let main_root = resolve_main_repo_root(&start, path_env).await?;
     let mut report = CleanupReport::default();
+    let mut prunable = Vec::new();
     for status in statuses {
         let name = worktree_display_name(&status.entry.path);
         if status.entry.locked {
@@ -364,7 +365,7 @@ pub async fn cleanup_claude_worktrees(
             report.kept_dirty.push(name);
         } else if status.entry.prunable {
             // Pruned in bulk below.
-            report.removed.push(name);
+            prunable.push(name);
         } else {
             let removed = match path_arg(&status.entry.path) {
                 Ok(path) => git(&main_root, &["worktree", "remove", path], path_env)
@@ -381,6 +382,15 @@ pub async fn cleanup_claude_worktrees(
             }
         }
     }
-    git(&main_root, &["worktree", "prune"], path_env).await?;
+    // `git worktree prune` is repository-wide, so it only runs when it would clear one of ours.
+    if !prunable.is_empty() {
+        match git(&main_root, &["worktree", "prune"], path_env).await {
+            Ok(_) => report.removed.extend(prunable),
+            Err(err) => {
+                log::warn!("git worktree prune failed: {err:#}");
+                report.failed.extend(prunable);
+            }
+        }
+    }
     Ok(report)
 }

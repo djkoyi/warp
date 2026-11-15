@@ -419,6 +419,15 @@ pub fn init(app: &mut AppContext) {
         ]);
     }
 
+    if cfg!(all(target_os = "macos", feature = "local_fs")) {
+        // Twin of the cmd-alt-n worktree binding for when 'Option as meta' is enabled.
+        app.register_fixed_bindings([FixedBinding::new(
+            "cmd-meta-n",
+            WorkspaceAction::NewClaudeWorktreeSession,
+            id!("Workspace") & !id!("Workspace_PaneDragging"),
+        )]);
+    }
+
     if ContextFlag::LaunchConfigurations.is_enabled() {
         app.register_fixed_bindings([FixedBinding::custom(
             CustomAction::SaveCurrentConfig,

@@ -28982,6 +28982,10 @@ impl TypedActionView for TerminalView {
                 }));
             }
             ReviewCliAgentChanges => {
+                if CLIAgentSessionsModel::as_ref(ctx).session(self.view_id).is_none() {
+                    self.show_error_toast("No hay Claude Code activo".to_owned(), ctx);
+                    return;
+                }
                 let cli_agent = self.active_cli_agent(ctx);
                 self.toggle_code_review_pane(
                     GitDeltaPreference::Always,
