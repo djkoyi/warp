@@ -107,6 +107,52 @@ fn show_account_usage_chip_uses_claude_path() {
 }
 
 #[test]
+fn show_puente_status_chip_defaults_to_true() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        TabSettings::handle(&app).read(&app, |settings, _ctx| {
+            assert!(*settings.show_puente_status_chip);
+        });
+    });
+}
+
+#[test]
+fn show_puente_status_chip_uses_claude_path() {
+    assert_eq!(
+        ShowPuenteStatusChip::toml_path(),
+        Some("claude.show_puente_status_chip")
+    );
+    assert_eq!(
+        ShowPuenteStatusChip::toml_key(),
+        "show_puente_status_chip"
+    );
+}
+
+#[test]
+fn puente_status_script_defaults_to_configured_path() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        TabSettings::handle(&app).read(&app, |settings, _ctx| {
+            assert_eq!(
+                settings.puente_status_script.value(),
+                "/Users/franklrodriguez/RiderProjects/puente/bin/puente-list-json.sh"
+            );
+        });
+    });
+}
+
+#[test]
+fn puente_status_script_uses_claude_path() {
+    assert_eq!(
+        PuenteStatusScript::toml_path(),
+        Some("claude.puente_status_script")
+    );
+    assert_eq!(PuenteStatusScript::toml_key(), "puente_status_script");
+}
+
+#[test]
 fn header_toolbar_chip_selection_default_contains_code_review() {
     let config = HeaderToolbarChipSelection::Default;
     assert!(config.contains_item(&HeaderToolbarItemKind::CodeReview));
