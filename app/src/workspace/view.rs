@@ -135,6 +135,7 @@ use super::action::{
 };
 #[cfg(all(feature = "local_fs", not(target_family = "wasm")))]
 use super::auto_handoff::AutoCloudHandoffController;
+use super::claude_tabs;
 pub(crate) use super::close_session_confirmation_dialog::OpenDialogSource;
 use super::close_session_confirmation_dialog::{
     CloseSessionConfirmationDialog, CloseSessionConfirmationEvent,
@@ -3847,6 +3848,18 @@ impl Workspace {
                 self.sync_window_button_visibility(ctx);
                 ctx.notify();
             }
+            TabSettingsChangedEvent::AutoTabNames { .. }
+            | TabSettingsChangedEvent::ClaudeCommand { .. }
+            | TabSettingsChangedEvent::ClaudeWorkspaces { .. } => {
+                self.update_window_title(ctx);
+                ctx.notify();
+            }
+            TabSettingsChangedEvent::AutoTabColors { .. } => {
+                for tab in &mut self.tabs {
+                    Self::sync_codebase_tab_color(tab, ctx);
+                }
+                ctx.notify();
+            }
             TabSettingsChangedEvent::UseVerticalTabs { .. } => {
                 let vertical_tabs_enabled = *TabSettings::as_ref(ctx).use_vertical_tabs;
                 // During HOA onboarding, keep the vertical tabs panel open
@@ -3896,10 +3909,8 @@ impl Workspace {
                 ctx.notify();
             }
             TabSettingsChangedEvent::DirectoryTabColors { .. } => {
-                if FeatureFlag::DirectoryTabColors.is_enabled() {
-                    for tab in &mut self.tabs {
-                        Self::sync_codebase_tab_color(tab, ctx);
-                    }
+                for tab in &mut self.tabs {
+                    Self::sync_codebase_tab_color(tab, ctx);
                 }
                 ctx.notify();
             }
@@ -5853,20 +5864,31 @@ impl Workspace {
     /// If the CWD is within a directory that has a configured color, applies it.
     /// If the CWD moves outside all configured directories, the directory color is cleared.
     fn sync_codebase_tab_color(tab: &mut TabData, ctx: &mut ViewContext<Self>) {
-        let Some(cwd) = tab
-            .pane_group
-            .as_ref(ctx)
-            .active_session_view(ctx)
-            .and_then(|tv| tv.as_ref(ctx).canonical_session_pwd_if_local(ctx))
-        else {
+        let Some(session_view) = tab.pane_group.as_ref(ctx).active_session_view(ctx) else {
+            return;
+        };
+        let session_view = session_view.as_ref(ctx);
+        let Some(cwd) = session_view.canonical_session_pwd_if_local(ctx) else {
             return;
         };
 
-        let color = TabSettings::as_ref(ctx)
-            .directory_tab_colors
-            .value()
-            .color_for_directory(cwd.as_path())
-            .and_then(|c| c.ansi_color());
+        let configured = if FeatureFlag::DirectoryTabColors.is_enabled() {
+            TabSettings::as_ref(ctx)
+                .directory_tab_colors
+                .value()
+                .color_for_directory(cwd.as_path())
+        } else {
+            None
+        };
+        let color = match configured {
+            Some(configured) => configured.ansi_color(),
+            None if *TabSettings::as_ref(ctx).auto_tab_colors.value() => {
+                let project_dir = claude_tabs::project_dir(session_view, ctx)
+                    .unwrap_or_else(|| cwd.as_path().to_path_buf());
+                Some(claude_tabs::project_color(&project_dir))
+            }
+            None => None,
+        };
 
         tab.default_directory_color = color;
         ctx.notify();
@@ -12788,6 +12810,20 @@ impl Workspace {
         ctx.notify();
     }
 
+    fn add_claude_tab_here(&mut self, ctx: &mut ViewContext<Self>) {
+        let cwd = self
+            .active_session_view(ctx)
+            .and_then(|view| view.as_ref(ctx).active_session_path_if_local(ctx))
+            .unwrap_or_default();
+        let command = TabSettings::as_ref(ctx).claude_command.value().clone();
+        self.add_tab_with_pane_layout(
+            PanesLayout::Template(claude_tabs::claude_pane_template(cwd, &command)),
+            Arc::new(HashMap::new()),
+            None,
+            ctx,
+        );
+    }
+
     fn add_docker_sandbox_tab(&mut self, ctx: &mut ViewContext<Self>) {
         self.add_docker_sandbox_tab_with_shared_session_creator(IsSharedSessionCreator::No, ctx);
     }
@@ -16311,11 +16347,10 @@ impl Workspace {
                 self.update_resource_center_action_target(ctx);
                 self.update_active_session(ctx);
 
-                if FeatureFlag::DirectoryTabColors.is_enabled()
-                    && let Some(tab) = self
-                        .tabs
-                        .iter_mut()
-                        .find(|t| t.pane_group.id() == pane_group.id())
+                if let Some(tab) = self
+                    .tabs
+                    .iter_mut()
+                    .find(|t| t.pane_group.id() == pane_group.id())
                 {
                     Self::sync_codebase_tab_color(tab, ctx);
                 }
@@ -16832,11 +16867,10 @@ impl Workspace {
                 // setup_code_review_panel here would race with refresh and
                 // re-create models that were just dropped.
 
-                if FeatureFlag::DirectoryTabColors.is_enabled()
-                    && let Some(tab) = self
-                        .tabs
-                        .iter_mut()
-                        .find(|t| t.pane_group.id() == pane_group.id())
+                if let Some(tab) = self
+                    .tabs
+                    .iter_mut()
+                    .find(|t| t.pane_group.id() == pane_group.id())
                 {
                     Self::sync_codebase_tab_color(tab, ctx);
                 }
@@ -23506,6 +23540,12 @@ impl Workspace {
         if *tab_settings.use_vertical_tabs.value() {
             context.set.insert(flags::USE_VERTICAL_TABS_FLAG);
         }
+        if *tab_settings.auto_tab_names.value() {
+            context.set.insert(flags::AUTO_TAB_NAMES_FLAG);
+        }
+        if *tab_settings.auto_tab_colors.value() {
+            context.set.insert(flags::AUTO_TAB_COLORS_FLAG);
+        }
         if *tab_settings.preserve_active_tab_color.value() {
             context.set.insert(flags::PRESERVE_ACTIVE_TAB_COLOR_FLAG);
         }
@@ -24400,6 +24440,7 @@ impl TypedActionView for Workspace {
             AddAmbientAgentTab => self.add_ambient_agent_tab(ctx),
             AddAgentTab => self.add_terminal_tab_with_new_agent_view(ctx),
             AddDockerSandboxTab => self.add_docker_sandbox_tab(ctx),
+            AddClaudeTabHere => self.add_claude_tab_here(ctx),
             StartAgentOnboardingTutorial(tutorial) => {
                 self.start_agent_onboarding_tutorial(tutorial.clone(), ctx)
             }

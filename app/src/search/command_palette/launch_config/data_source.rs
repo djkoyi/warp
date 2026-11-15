@@ -10,6 +10,8 @@ use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::data_source::{DataSourceSearchError, Query, QueryResult};
 use crate::search::mixer::{DataSourceRunErrorWrapper, SyncDataSource};
 use crate::user_config::{WarpConfig, WarpConfigUpdateEvent};
+use crate::workspace::claude_tabs::configured_workspace_launch_configs;
+use crate::workspace::tab_settings::{TabSettings, TabSettingsChangedEvent};
 
 /// Datasource that searches against `LaunchConfig`s.
 pub struct DataSource {
@@ -33,6 +35,7 @@ impl DataSource {
 
     fn new_fuzzy(ctx: &mut ModelContext<Self>) -> Self {
         ctx.subscribe_to_model(&WarpConfig::handle(ctx), Self::handle_config_event);
+        ctx.subscribe_to_model(&TabSettings::handle(ctx), Self::handle_tab_settings_event);
         let mut searcher = Box::new(FuzzyLaunchConfigSearcher::default());
         searcher.refresh_search_index(ctx);
         Self { searcher }
@@ -41,11 +44,27 @@ impl DataSource {
     #[cfg(not(target_family = "wasm"))]
     fn new_full_text(ctx: &mut ModelContext<Self>) -> Self {
         ctx.subscribe_to_model(&WarpConfig::handle(ctx), Self::handle_config_event);
+        ctx.subscribe_to_model(&TabSettings::handle(ctx), Self::handle_tab_settings_event);
         let mut searcher = Box::new(full_text_searcher::FullTextLaunchConfigSearcher::new(
             ctx.background_executor(),
         ));
         searcher.refresh_search_index(ctx);
         Self { searcher }
+    }
+
+    fn handle_tab_settings_event(
+        &mut self,
+        _: ModelHandle<TabSettings>,
+        event: &TabSettingsChangedEvent,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        if matches!(
+            event,
+            TabSettingsChangedEvent::ClaudeWorkspaces { .. }
+                | TabSettingsChangedEvent::ClaudeCommand { .. }
+        ) {
+            self.searcher.refresh_search_index(ctx);
+        }
     }
 
     fn handle_config_event(
@@ -83,6 +102,17 @@ impl Entity for DataSource {
     type Event = ();
 }
 
+/// User launch configurations plus the generated workspace ones, keyed by lowercased name.
+fn all_launch_configs(app: &AppContext) -> HashMap<String, LaunchConfig> {
+    WarpConfig::as_ref(app)
+        .launch_configs()
+        .iter()
+        .cloned()
+        .chain(configured_workspace_launch_configs(app))
+        .map(|config| (config.name.to_lowercase(), config))
+        .collect()
+}
+
 trait LaunchConfigSearcher {
     fn search(&self, search_term: &str) -> anyhow::Result<Vec<SearchItem>>;
 
@@ -112,11 +142,7 @@ impl LaunchConfigSearcher for FuzzyLaunchConfigSearcher {
     }
 
     fn refresh_search_index(&mut self, app: &AppContext) {
-        self.configs = WarpConfig::as_ref(app)
-            .launch_configs()
-            .iter()
-            .map(|config| (config.name.to_lowercase(), config.clone()))
-            .collect();
+        self.configs = all_launch_configs(app);
     }
 }
 
@@ -128,13 +154,12 @@ mod full_text_searcher {
     use fuzzy_match::FuzzyMatchResult;
     use warp_search_core::define_search_schema;
     use warpui::r#async::executor::Background;
-    use warpui::{AppContext, SingletonEntity};
+    use warpui::AppContext;
 
     use crate::launch_configs::launch_config::LaunchConfig;
     use crate::search::command_palette::launch_config::data_source::LaunchConfigSearcher;
     use crate::search::command_palette::launch_config::search_item::SearchItem;
     use crate::search::searcher::{AsyncSearcher, DEFAULT_MEMORY_BUDGET, SCORE_CONVERSION_FACTOR};
-    use crate::user_config::WarpConfig;
 
     // The name of the launch configs are duplicated to ensure that the searcher
     // hashes the name to uniquely identify the launch config.
@@ -187,11 +212,7 @@ mod full_text_searcher {
         }
 
         fn refresh_search_index(&mut self, app: &AppContext) {
-            self.configs = WarpConfig::as_ref(app)
-                .launch_configs()
-                .iter()
-                .map(|config| (config.name.to_lowercase(), config.clone()))
-                .collect();
+            self.configs = super::all_launch_configs(app);
             if self.rebuild_search_index().is_err() {
                 warp_errors::report_error!(
                     "Failed to create search index writer for launch configs"

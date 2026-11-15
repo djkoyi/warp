@@ -259,6 +259,8 @@ pub enum WorkspaceAction {
     AddAgentTab,
     /// Add a new tab running a local Docker sandbox via `sbx`.
     AddDockerSandboxTab,
+    /// Add a new tab in the active session's directory that runs the configured Claude command.
+    AddClaudeTabHere,
     OpenNewSessionMenu {
         anchor: NewSessionMenuAnchor,
     },
@@ -991,6 +993,7 @@ impl WorkspaceAction {
             | AddAgentTab
             | AddAmbientAgentTab
             | AddDockerSandboxTab
+            | AddClaudeTabHere
             | AddWindow
             | AddWindowWithShell { .. }
             | CloseWindow

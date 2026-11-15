@@ -10,6 +10,7 @@ use crate::search::command_palette::mixer::CommandPaletteItemAction;
 use crate::search::command_palette::render_util::render_search_item_icon;
 use crate::search::result_renderer::ItemHighlightState;
 use crate::ui_components::icons::Icon;
+use crate::workspace::claude_tabs::WORKSPACE_PALETTE_PREFIX;
 
 /// SearchItem for a matching [`LaunchConfig`].
 #[derive(Debug)]
@@ -59,7 +60,7 @@ impl crate::search::item::SearchItem for SearchItem {
     fn accept_result(&self) -> Self::Action {
         CommandPaletteItemAction::OpenLaunchConfiguration {
             config: self.launch_config.clone(),
-            open_in_active_window: false,
+            open_in_active_window: self.launch_config.name.starts_with(WORKSPACE_PALETTE_PREFIX),
         }
     }
 

@@ -170,7 +170,9 @@ use crate::util::openable_file_type::FileTarget;
 use crate::view_components::ToastFlavor;
 use crate::workflows::workflow::Workflow;
 use crate::workflows::{WorkflowSelectionSource, WorkflowSource, WorkflowType};
+use crate::workspace::claude_tabs;
 use crate::workspace::tab_group::TabGroupId;
+use crate::workspace::tab_settings::TabSettings;
 use crate::workspace::{
     self, CommandSearchOptions, PaneViewLocator, TabBarLocation, WorkspaceAction,
 };
@@ -5246,10 +5248,22 @@ impl PaneGroup {
             .unwrap_or_default()
     }
 
-    /// The resolved display title for this pane group —
-    /// custom title if set, otherwise the focused pane's title.
+    /// The resolved display title for this pane group — custom title if set, otherwise the
+    /// project-and-branch title when enabled, otherwise the focused pane's title.
     pub fn display_title(&self, ctx: &AppContext) -> String {
-        self.custom_title(ctx).unwrap_or_else(|| self.title(ctx))
+        self.custom_title(ctx)
+            .or_else(|| self.auto_title(ctx))
+            .unwrap_or_else(|| self.title(ctx))
+    }
+
+    fn auto_title(&self, ctx: &AppContext) -> Option<String> {
+        if !*TabSettings::as_ref(ctx).auto_tab_names.value() {
+            return None;
+        }
+        let session_view = self.active_session_view(ctx)?;
+        let session_view = session_view.as_ref(ctx);
+        let project_dir = claude_tabs::project_dir(session_view, ctx)?;
+        claude_tabs::auto_tab_title(&project_dir, session_view.current_git_branch(ctx).as_deref())
     }
 
     /// The tab-level custom title, if one has been set via the rename-tab flow.
