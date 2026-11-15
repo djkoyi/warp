@@ -1667,6 +1667,15 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
         .with_context_predicate(id!("Workspace"))
         .with_custom_action(CustomAction::ShowAppearance),
         EditableBinding::new(
+            "workspace:show_settings_claude_code_page",
+            "Claude Code: configuración (MCP, skills, hooks…)",
+            WorkspaceAction::ShowSettingsPage(SettingsSection::ClaudeCode),
+        )
+        .with_group(bindings::BindingGroup::Settings.as_str())
+        .with_context_predicate(id!("Workspace"))
+        .with_enabled(|| cfg!(not(target_family = "wasm")))
+        .with_mac_key_binding("cmd-alt-,"),
+        EditableBinding::new(
             "workspace:show_settings_features_page",
             "Open Settings: Features",
             WorkspaceAction::ShowSettingsPage(SettingsSection::Features),

@@ -15579,6 +15579,12 @@ impl Workspace {
                 #[cfg(not(feature = "local_fs"))]
                 let _ = path;
             }
+            SettingsViewEvent::OpenClaudeCodeFile(path) => {
+                #[cfg(feature = "local_fs")]
+                self.open_custom_router_file(path, ctx);
+                #[cfg(not(feature = "local_fs"))]
+                let _ = path;
+            }
         }
     }
 
