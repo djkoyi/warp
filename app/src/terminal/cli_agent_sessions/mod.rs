@@ -492,6 +492,13 @@ impl CLIAgentSessionsModel {
         self.meters.get(&terminal_view_id)
     }
 
+    /// Account-wide usage aggregated across every live session, for the global usage chip in the
+    /// top bar. `meters` only holds entries for live sessions (cleared in [`Self::remove_session`]),
+    /// so this never reports a session that has ended. Takes no terminal-model lock.
+    pub fn global_meters(&self) -> Option<meters::GlobalMeters> {
+        meters::aggregate_global_meters(self.meters.values().filter_map(|m| m.snapshot.as_ref()))
+    }
+
     /// Returns `true` if the rich input editor is currently open for this terminal.
     pub fn is_input_open(&self, terminal_view_id: EntityId) -> bool {
         self.sessions
