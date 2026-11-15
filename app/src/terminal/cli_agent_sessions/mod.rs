@@ -4,6 +4,7 @@ pub mod meters;
 #[cfg(not(target_family = "wasm"))]
 pub mod meters_bridge;
 pub mod meters_ui;
+pub mod tab_details;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod plugin_manager;
 

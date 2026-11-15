@@ -58,7 +58,7 @@ pub struct MeterSegment {
 }
 
 impl MeterSegment {
-    fn new(text: impl Into<String>, tone: MeterTone) -> Self {
+    pub(crate) fn new(text: impl Into<String>, tone: MeterTone) -> Self {
         Self {
             text: text.into(),
             tone,
@@ -107,7 +107,7 @@ pub fn context_tone(used_pct: f32, threshold: u8) -> MeterTone {
     }
 }
 
-fn rate_limit_tone(used_pct: f32) -> MeterTone {
+pub(crate) fn rate_limit_tone(used_pct: f32) -> MeterTone {
     if used_pct >= RATE_LIMIT_DANGER_PCT {
         MeterTone::Danger
     } else if used_pct >= RATE_LIMIT_WARNING_PCT {

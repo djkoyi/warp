@@ -3,10 +3,11 @@
 //! during render.
 
 use warpui::elements::{
-    ClipConfig, CrossAxisAlignment, Element, Flex, Highlight, HighlightedRange, MainAxisSize,
-    ParentElement, Text,
+    CrossAxisAlignment, Element, Flex, Highlight, HighlightedRange, MainAxisSize, ParentElement,
+    Text,
 };
 use warpui::fonts::{Properties, Weight};
+use warpui::text_layout::ClipConfig;
 
 use super::CLIAgentSession;
 use super::meters::{CLIAgentActivity, CLIAgentMeters, CLIAgentMetersSnapshot, RateLimitWindow};
@@ -87,7 +88,10 @@ pub fn conversation_title(terminal_title: &str) -> Option<String> {
 }
 
 fn is_leading_punctuation(c: char) -> bool {
-    matches!(c, '¿' | '¡' | '"' | '\'' | '(' | '[' | '~' | '/' | '.' | '#' | '@' | '$')
+    matches!(
+        c,
+        '¿' | '¡' | '"' | '\'' | '(' | '[' | '~' | '/' | '.' | '#' | '@' | '$'
+    )
 }
 
 /// `carpeta · rama`: the last component of the working directory (`~` for home) and the git
@@ -243,7 +247,10 @@ pub fn tab_row(
     }
     let snapshot = meters.and_then(|m| m.snapshot.as_ref());
     let mut items = Vec::new();
-    for field in ClaudeTabField::ALL.into_iter().filter(|field| enabled(*field)) {
+    for field in ClaudeTabField::ALL
+        .into_iter()
+        .filter(|field| enabled(*field))
+    {
         match field {
             ClaudeTabField::Model => {
                 if let Some(model) = snapshot.and_then(model_label) {
@@ -268,7 +275,10 @@ pub fn tab_row(
             }
             ClaudeTabField::Cost => {
                 if let Some(cost) = snapshot.and_then(|s| s.cost_usd) {
-                    items.push(vec![MeterSegment::new(format_cost(cost), MeterTone::Normal)]);
+                    items.push(vec![MeterSegment::new(
+                        format_cost(cost),
+                        MeterTone::Normal,
+                    )]);
                 }
             }
             ClaudeTabField::RateLimits => {
@@ -317,22 +327,24 @@ pub fn tab_row_for_session(
     )
 }
 
+/// One labeled line of the hover sidecar; its items are joined like a [`ClaudeTabRow`].
+pub type DetailLine = (&'static str, Vec<Vec<MeterSegment>>);
+
+fn separate(segments: Vec<MeterSegment>) -> Vec<Vec<MeterSegment>> {
+    segments.into_iter().map(|segment| vec![segment]).collect()
+}
+
 /// Labeled lines with everything known about the session, for the hover sidecar.
 pub fn detail_lines(
     activity: Option<CLIAgentActivity>,
     meters: &CLIAgentMeters,
     threshold: u8,
     now: i64,
-) -> Vec<(&'static str, Vec<MeterSegment>)> {
+) -> Vec<DetailLine> {
     let mut lines = Vec::new();
     if let Some(activity) = activity {
-        lines.push((
-            "Estado",
-            vec![MeterSegment::new(
-                activity_label(activity),
-                activity_tone(activity),
-            )],
-        ));
+        let status = MeterSegment::new(activity_label(activity), activity_tone(activity));
+        lines.push(("Estado", vec![vec![status]]));
     }
     if let Some(snapshot) = &meters.snapshot {
         if let Some(model) = model_label(snapshot) {
@@ -340,10 +352,10 @@ pub fn detail_lines(
             if let Some(id) = snapshot.model_id.as_ref().filter(|id| **id != model) {
                 segments.push(MeterSegment::new(format!("({id})"), MeterTone::Muted));
             }
-            lines.push(("Modelo", segments));
+            lines.push(("Modelo", vec![segments]));
         }
         if let Some(segments) = context_detail(snapshot, threshold) {
-            lines.push(("Contexto", segments));
+            lines.push(("Contexto", separate(segments)));
         }
         if let (Some(input), Some(output)) = (
             snapshot.context_input_tokens,
@@ -351,49 +363,50 @@ pub fn detail_lines(
         ) {
             lines.push((
                 "Último turno",
-                vec![MeterSegment::new(
-                    format!(
-                        "entrada {} · salida {}",
-                        format_count(input),
-                        format_count(output)
-                    ),
-                    MeterTone::Muted,
-                )],
+                in_out_items(input, output, MeterTone::Muted),
             ));
         }
         if snapshot.session_input_tokens.is_some() || snapshot.session_output_tokens.is_some() {
             lines.push((
-                "Sesión",
-                vec![MeterSegment::new(
-                    format!(
-                        "entrada {} · salida {}",
-                        format_count(snapshot.session_input_tokens.unwrap_or(0)),
-                        format_count(snapshot.session_output_tokens.unwrap_or(0))
-                    ),
+                "Tokens de la sesión",
+                in_out_items(
+                    snapshot.session_input_tokens.unwrap_or(0),
+                    snapshot.session_output_tokens.unwrap_or(0),
                     MeterTone::Normal,
-                )],
+                ),
             ));
         }
         if let Some(cost) = snapshot.cost_usd {
-            lines.push((
-                "Costo",
-                vec![MeterSegment::new(format_cost(cost), MeterTone::Normal)],
-            ));
+            let cost = MeterSegment::new(format_cost(cost), MeterTone::Normal);
+            lines.push(("Costo", vec![vec![cost]]));
         }
         if let Some(segments) = lines_segments(snapshot) {
-            lines.push(("Líneas", segments));
+            lines.push(("Líneas", vec![segments]));
         }
         if let Some(window) = snapshot.five_hour {
-            lines.push(("Límite 5 h", rate_limit_detail(window, now)));
+            lines.push(("Límite 5 h", separate(rate_limit_detail(window, now))));
         }
         if let Some(window) = snapshot.seven_day {
-            lines.push(("Límite 7 d", rate_limit_detail(window, now)));
+            lines.push(("Límite 7 d", separate(rate_limit_detail(window, now))));
         }
     }
     if let Some(segments) = compaction_detail(meters) {
-        lines.push(("Compactación", segments));
+        lines.push(("Compactación", separate(segments)));
     }
     lines
+}
+
+fn in_out_items(input: u64, output: u64, tone: MeterTone) -> Vec<Vec<MeterSegment>> {
+    vec![
+        vec![MeterSegment::new(
+            format!("entrada {}", format_count(input)),
+            tone,
+        )],
+        vec![MeterSegment::new(
+            format!("salida {}", format_count(output)),
+            tone,
+        )],
+    ]
 }
 
 fn context_detail(snapshot: &CLIAgentMetersSnapshot, threshold: u8) -> Option<Vec<MeterSegment>> {
@@ -468,10 +481,7 @@ fn compaction_detail(meters: &CLIAgentMeters) -> Option<Vec<MeterSegment>> {
         ));
     }
     if compaction.last_backup_path.is_some() {
-        segments.push(MeterSegment::new(
-            "historial respaldado",
-            MeterTone::Muted,
-        ));
+        segments.push(MeterSegment::new("historial respaldado", MeterTone::Muted));
     }
     (!segments.is_empty()).then_some(segments)
 }
@@ -518,19 +528,21 @@ pub fn render_tab_row(
         ),
         ClaudeTabRow::Items(items) => {
             let (text, ranges) = row_text(items);
-            let highlights = ranges.into_iter().filter(|(range, _)| !range.is_empty()).map(
-                |(range, tone)| {
-                    let mut highlight = Highlight::new().with_foreground_color(tone.color(appearance));
+            let highlights = ranges
+                .into_iter()
+                .filter(|(range, _)| !range.is_empty())
+                .map(|(range, tone)| {
+                    let mut highlight =
+                        Highlight::new().with_foreground_color(tone.color(appearance));
                     if matches!(tone, MeterTone::Warning | MeterTone::Danger) {
-                        highlight =
-                            highlight.with_properties(Properties::default().weight(Weight::Semibold));
+                        highlight = highlight
+                            .with_properties(Properties::default().weight(Weight::Semibold));
                     }
                     HighlightedRange {
                         highlight,
                         highlight_indices: range.collect(),
                     }
-                },
-            );
+                });
             Some(
                 Text::new_inline(text, family, font_size)
                     .with_clip(ClipConfig::ellipsis())
@@ -544,7 +556,7 @@ pub fn render_tab_row(
 
 /// Renders the labeled lines of [`detail_lines`] for the hover sidecar.
 pub fn render_detail_lines(
-    lines: &[(&'static str, Vec<MeterSegment>)],
+    lines: &[DetailLine],
     font_size: f32,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
@@ -554,8 +566,8 @@ pub fn render_detail_lines(
         .with_main_axis_size(MainAxisSize::Min)
         .with_cross_axis_alignment(CrossAxisAlignment::Start)
         .with_spacing(2.);
-    for (label, segments) in lines {
-        let (value, ranges) = row_text(std::slice::from_ref(segments));
+    for (label, items) in lines {
+        let (value, ranges) = row_text(items);
         let label_text = format!("{label}: ");
         let offset = label_text.chars().count();
         let highlights = ranges

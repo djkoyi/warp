@@ -61,7 +61,10 @@ fn conversation_title_strips_status_glyphs() {
         conversation_title("✻ ¿Qué hace esto?").as_deref(),
         Some("¿Qué hace esto?")
     );
-    assert_eq!(conversation_title("Sin glifo").as_deref(), Some("Sin glifo"));
+    assert_eq!(
+        conversation_title("Sin glifo").as_deref(),
+        Some("Sin glifo")
+    );
 }
 
 #[test]
