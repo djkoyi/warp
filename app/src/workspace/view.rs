@@ -3821,6 +3821,30 @@ impl Workspace {
         event: &CLIAgentSessionsModelEvent,
         ctx: &mut ViewContext<Self>,
     ) {
+        // The global usage chip aggregates every live session across all windows, so it must
+        // refresh on any change to which sessions are live or to their reported usage, even when
+        // the session lives in another workspace. Its segments omit the per-minute reset countdown
+        // (tooltip-only), so comparing them repaints only on a real change.
+        if matches!(
+            event,
+            CLIAgentSessionsModelEvent::Started { .. }
+                | CLIAgentSessionsModelEvent::Ended { .. }
+                | CLIAgentSessionsModelEvent::MetersUpdated { .. }
+        ) {
+            let global_segments = if meters_ui::meters_enabled(ctx) {
+                CLIAgentSessionsModel::as_ref(ctx)
+                    .global_meters()
+                    .map(|global| meters_ui::global_chip_segments(&global))
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            if self.rendered_global_meter_segments != global_segments {
+                self.rendered_global_meter_segments = global_segments;
+                ctx.notify();
+            }
+        }
+
         if matches!(
             event,
             CLIAgentSessionsModelEvent::Started { .. }
