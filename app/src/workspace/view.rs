@@ -25618,6 +25618,13 @@ impl TypedActionView for Workspace {
                 );
                 ctx.notify();
             }
+            ToggleShowAccountUsageChip => {
+                TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let new_value = !*settings.show_account_usage_chip.value();
+                    let _ = settings.show_account_usage_chip.set_value(new_value, ctx);
+                });
+                ctx.notify();
+            }
             ToggleAgentManagementView => {
                 if AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
                     && FeatureFlag::AgentManagementView.is_enabled()
