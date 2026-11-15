@@ -17,6 +17,9 @@ id warp_get_accessibility_contents(WarpHostView *);
 void warp_marked_text_updated(WarpHostView *, NSString *, NSRange);
 void warp_marked_text_cleared(WarpHostView *);
 
+// kVK_Function from <Carbon/HIToolbox/Events.h>.
+static const unsigned short kWarpFunctionKeyCode = 0x3F;
+
 @implementation NSPasteboard (Warp)
 
 - (NSArray *)getFilePaths {
@@ -48,6 +51,8 @@ void warp_marked_text_cleared(WarpHostView *);
     id metalDevice;
 
     NSMutableAttributedString *markedText;
+    // The input method's selection within markedText, as passed to setMarkedText:.
+    NSRange markedTextSelectedRange;
     NSMutableString *textToInsert;
 
     // Whether to have resize event callback called asynchronously.
@@ -263,6 +268,33 @@ void warp_marked_text_cleared(WarpHostView *);
 
 - (void)flagsChanged:(NSEvent *)event {
     if (self.readyForWarp) warp_handle_view_event(self, event, NO);
+
+    // When "Press fn/globe key to: Start Dictation" is configured, the system only recognizes the
+    // shortcut if the fn flagsChanged event reaches the input context, which answers with
+    // doCommandBySelector:startDictation:. Other modifiers stay out of the input context so IMEs
+    // don't start reacting to bare modifier presses.
+    if (event.keyCode == kWarpFunctionKeyCode) {
+        [[self inputContext] handleEvent:event];
+    }
+}
+
+// Forwards dictation commands to NSApp, which owns the dictation session. Returns whether the
+// selector was a dictation command.
+- (BOOL)forwardDictationSelectorToApp:(SEL)selector sender:(id)sender {
+    // These are NSApplication actions without a public declaration, hence NSSelectorFromString.
+    static SEL startDictationSelector = NULL;
+    static SEL stopDictationSelector = NULL;
+    if (startDictationSelector == NULL) {
+        startDictationSelector = NSSelectorFromString(@"startDictation:");
+        stopDictationSelector = NSSelectorFromString(@"stopDictation:");
+    }
+    if (selector != startDictationSelector && selector != stopDictationSelector) {
+        return NO;
+    }
+    if ([NSApp respondsToSelector:selector]) {
+        [NSApp performSelector:selector withObject:sender];
+    }
+    return YES;
 }
 
 - (void)dealloc {
@@ -390,6 +422,11 @@ void warp_marked_text_cleared(WarpHostView *);
     return warp_get_accessibility_contents(self);
 }
 
+// Consistent with accessibilityNumberOfCharacters; dictation needs a valid (non-NSNotFound) range.
+- (NSRange)accessibilitySelectedTextRange {
+    return NSMakeRange(0, 0);
+}
+
 - (NSInteger)accessibilityNumberOfCharacters {
     return 0;
 }
@@ -406,18 +443,30 @@ void warp_marked_text_cleared(WarpHostView *);
 // NSTextInputClient protocol implementation
 ////////////////////////////////////////////////////////////////////////////////
 
+// The only document we expose to input methods is the marked text itself.
 - (nullable NSAttributedString *)attributedSubstringForProposedRange:(NSRange)range
                                                          actualRange:
                                                              (nullable NSRangePointer)actualRange {
-    return nil;
+    NSUInteger markedLength = [markedText length];
+    // Input methods may ask for unbounded lengths, so clamp instead of using NSIntersectionRange,
+    // whose NSMaxRange can overflow.
+    if (range.location == NSNotFound || range.location >= markedLength) {
+        if (actualRange) *actualRange = NSMakeRange(NSNotFound, 0);
+        return nil;
+    }
+    NSRange clamped = NSMakeRange(range.location, MIN(range.length, markedLength - range.location));
+    if (actualRange) *actualRange = clamped;
+    if (clamped.length == 0) return nil;
+    return [markedText attributedSubstringFromRange:clamped];
 }
 
 - (NSUInteger)characterIndexForPoint:(NSPoint)thePoint {
     return (NSUInteger)0;
 }
 
-// This is a no-op as we will be handling control characters in KeyDown events.
+// Control characters are handled in KeyDown events, so everything else is a no-op.
 - (void)doCommandBySelector:(SEL)selector {
+    [self forwardDictationSelectorToApp:selector sender:self];
 }
 
 - (NSRect)firstRectForCharacterRange:(NSRange)range
@@ -478,8 +527,19 @@ void warp_marked_text_cleared(WarpHostView *);
         return NSMakeRange(NSNotFound, 0);
 }
 
+// Must never return NSNotFound: macOS dictation silently fails to start when it can't tell where
+// text will be inserted.
 - (NSRange)selectedRange {
-    return NSMakeRange(0, 0);
+    NSUInteger markedLength = [markedText length];
+    if (markedLength == 0) {
+        return NSMakeRange(0, 0);
+    }
+    NSRange selection = markedTextSelectedRange;
+    if (selection.location == NSNotFound || selection.location > markedLength) {
+        return NSMakeRange(markedLength, 0);
+    }
+    return NSMakeRange(selection.location,
+                       MIN(selection.length, markedLength - selection.location));
 }
 
 - (void)setMarkedText:(id)string
@@ -494,6 +554,7 @@ void warp_marked_text_cleared(WarpHostView *);
         markedText = [[NSMutableAttributedString alloc] initWithAttributedString:string];
     else
         markedText = [[NSMutableAttributedString alloc] initWithString:string];
+    markedTextSelectedRange = selectedRange;
 
     if (self.readyForWarp) {
         warp_marked_text_updated(self, markedText.string, selectedRange);
@@ -510,6 +571,7 @@ void warp_marked_text_cleared(WarpHostView *);
         imeTouchedMarkedTextDuringInterpret = YES;
     }
     [[markedText mutableString] setString:@""];
+    markedTextSelectedRange = NSMakeRange(NSNotFound, 0);
     if (self.readyForWarp) {
         warp_update_ime_state(self, NO);
         warp_marked_text_cleared(self);
