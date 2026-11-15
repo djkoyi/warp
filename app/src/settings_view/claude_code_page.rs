@@ -43,10 +43,11 @@ use crate::editor::{
 };
 use crate::ui_components::blended_colors;
 use crate::view_components::ToastFlavor;
-use crate::workspace::ActiveSession;
+use crate::workspace::{ActiveSession, WorkspaceAction};
 
 const PAGE_TITLE: &str = "Claude Code";
 const RELOAD_HINT: &str = "Recarga Claude en las pestañas para aplicar el cambio";
+const RELOAD_ALL_TABS_LABEL: &str = "Recargar Claude en todas las pestañas";
 const TITLE_FONT_SIZE: f32 = 13.;
 const ROW_SPACING: f32 = 10.;
 const BODY_EDITOR_MIN_HEIGHT: f32 = 120.;
@@ -1803,6 +1804,29 @@ impl SettingsWidget for OverviewWidget {
                     RELOAD_HINT,
                     theme.ui_warning_color(),
                 ))
+                .with_margin_top(4.)
+                .finish(),
+            );
+            column.add_child(
+                Container::new(
+                    appearance
+                        .ui_builder()
+                        .button(
+                            ButtonVariant::Accent,
+                            view.mouse_state("reload_claude_in_all_tabs"),
+                        )
+                        .with_text_label(RELOAD_ALL_TABS_LABEL.to_owned())
+                        .with_style(UiComponentStyles {
+                            font_size: Some(CONTENT_FONT_SIZE),
+                            padding: Some(Coords::uniform(4.).left(8.).right(8.)),
+                            ..Default::default()
+                        })
+                        .build()
+                        .on_click(|ctx, _, _| {
+                            ctx.dispatch_typed_action(WorkspaceAction::ReloadClaudeInAllTabs)
+                        })
+                        .finish(),
+                )
                 .with_margin_top(4.)
                 .finish(),
             );

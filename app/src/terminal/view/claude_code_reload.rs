@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use settings::Setting as _;
 use warpui::r#async::Timer;
 use warpui::{SingletonEntity as _, ViewContext};
 
