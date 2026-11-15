@@ -352,3 +352,71 @@ fn formats_tokens_cost_and_resets() {
     assert_eq!(format_reset_in(now, now), None);
     assert_eq!(format_reset_in(now - 10, now), None);
 }
+
+fn snapshot_with(
+    five_hour: Option<RateLimitWindow>,
+    seven_day: Option<RateLimitWindow>,
+    cost_usd: Option<f64>,
+) -> CLIAgentMetersSnapshot {
+    CLIAgentMetersSnapshot {
+        five_hour,
+        seven_day,
+        cost_usd,
+        ..CLIAgentMetersSnapshot::default()
+    }
+}
+
+fn window(used_pct: f32, resets_at: Option<i64>) -> RateLimitWindow {
+    RateLimitWindow {
+        used_pct,
+        resets_at,
+    }
+}
+
+#[test]
+fn global_meters_pick_freshest_window_and_sum_cost() {
+    let a = snapshot_with(
+        Some(window(40., Some(100))),
+        Some(window(10., Some(200))),
+        Some(1.50),
+    );
+    let b = snapshot_with(
+        Some(window(55., Some(300))),
+        Some(window(18., Some(400))),
+        Some(2.25),
+    );
+    let global = aggregate_global_meters([&a, &b]).expect("some global meters");
+    // Highest used_pct wins per window: 5h from b (55%), 7d from b (18%).
+    assert_eq!(global.five_hour, Some(window(55., Some(300))));
+    assert_eq!(global.seven_day, Some(window(18., Some(400))));
+    // Cost is summed across the live sessions.
+    assert_eq!(global.cost_usd, Some(3.75));
+}
+
+#[test]
+fn global_meters_combine_windows_and_cost_from_partial_snapshots() {
+    // One session only reports cost, another only the rate-limit windows.
+    let only_cost = snapshot_with(None, None, Some(0.80));
+    let only_windows = snapshot_with(Some(window(30., None)), Some(window(12., None)), None);
+    let global = aggregate_global_meters([&only_cost, &only_windows]).expect("some global meters");
+    assert_eq!(global.five_hour, Some(window(30., None)));
+    assert_eq!(global.seven_day, Some(window(12., None)));
+    assert_eq!(global.cost_usd, Some(0.80));
+}
+
+#[test]
+fn global_meters_are_none_without_any_usable_value() {
+    let empty = CLIAgentMetersSnapshot::default();
+    assert_eq!(aggregate_global_meters([&empty]), None);
+    assert_eq!(aggregate_global_meters(std::iter::empty()), None);
+}
+
+#[test]
+fn global_meters_cost_only_still_reports() {
+    let a = snapshot_with(None, None, Some(1.0));
+    let b = snapshot_with(None, None, Some(2.0));
+    let global = aggregate_global_meters([&a, &b]).expect("some global meters");
+    assert_eq!(global.five_hour, None);
+    assert_eq!(global.seven_day, None);
+    assert_eq!(global.cost_usd, Some(3.0));
+}
