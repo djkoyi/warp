@@ -13,6 +13,7 @@ mod banner;
 mod billing;
 mod changelog_model;
 mod chip_configurator;
+mod claude_tasks;
 mod cloud_object;
 mod code;
 mod code_review;
@@ -2159,6 +2160,7 @@ pub(crate) fn initialize_app(
     menu::init(ctx);
     tips::tip_view::init(ctx);
     launch_configs::init(ctx);
+    claude_tasks::init(ctx);
     workflows::init(ctx);
     themes::theme_chooser::init(ctx);
     themes::theme_creator_modal::init(ctx);

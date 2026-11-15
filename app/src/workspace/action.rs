@@ -879,6 +879,8 @@ pub enum WorkspaceAction {
     },
     /// Opens the settings.toml file in a code editor pane.
     OpenSettingsFile,
+    /// Scheduled Claude Code tasks and app preview.
+    ClaudeTasks(crate::claude_tasks::ClaudeTasksAction),
     /// Opens a new agent session to fix settings.toml errors using the modify-settings skill.
     FixSettingsWithOz {
         error_description: String,
@@ -1265,6 +1267,7 @@ impl WorkspaceAction {
             #[cfg(feature = "local_fs")]
             FileDeleted { .. } => false, // File deletion doesn't change workspace state
             OpenEnvironmentManagementPane => false,
+            ClaudeTasks(_) => false,
             #[cfg(target_os = "linux")]
             DismissWaylandCrashRecoveryBannerAndOpenLink => false,
             #[cfg(target_family = "wasm")]
