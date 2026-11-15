@@ -83,8 +83,8 @@ use crate::terminal::alt_screen_reporting::{
     AltScreenReporting, FocusReportingEnabled, MouseReportingEnabled, ScrollReportingEnabled,
 };
 use crate::terminal::general_settings::{
-    GeneralSettings, LinkTooltip, LoginItem, QuitOnLastWindowClosed, RestoreSession,
-    ShowWarningBeforeQuitting,
+    ClaudeCodeAutoResume, ClaudeCodeResumeAskFirst, GeneralSettings, LinkTooltip, LoginItem,
+    QuitOnLastWindowClosed, RestoreSession, ShowWarningBeforeQuitting,
 };
 use crate::terminal::input::OPEN_COMPLETIONS_KEYBINDING_NAME;
 use crate::terminal::keys_settings::{
@@ -174,6 +174,24 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             context,
             flags::RESTORE_SESSION_CONTEXT_FLAG,
         ),
+        ToggleSettingActionPair::new(
+            "resume Claude Code sessions in restored panes",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleClaudeCodeAutoResume,
+            )),
+            context,
+            flags::CLAUDE_CODE_AUTO_RESUME_CONTEXT_FLAG,
+        )
+        .with_enabled(|| FeatureFlag::ClaudeCodeSessionResume.is_enabled()),
+        ToggleSettingActionPair::new(
+            "ask before resuming Claude Code sessions",
+            builder(SettingsAction::FeaturesPageToggle(
+                FeaturesPageAction::ToggleClaudeCodeResumeAskFirst,
+            )),
+            context,
+            flags::CLAUDE_CODE_RESUME_ASK_FIRST_CONTEXT_FLAG,
+        )
+        .with_enabled(|| FeatureFlag::ClaudeCodeSessionResume.is_enabled()),
         ToggleSettingActionPair::new(
             EXTRA_META_KEYS_LEFT_TEXT,
             builder(SettingsAction::FeaturesPageToggle(
@@ -750,6 +768,8 @@ pub enum FeaturesPageAction {
     ToggleAsyncFind,
     ToggleNotifications,
     ToggleRestoreSession,
+    ToggleClaudeCodeAutoResume,
+    ToggleClaudeCodeResumeAskFirst,
     ToggleAutocompleteSymbols,
     ToggleLinuxClipboardSelection,
     ToggleOpenLinksInDesktopApp,
@@ -940,6 +960,14 @@ impl FeaturesPageAction {
             Self::ToggleRestoreSession => {
                 TelemetryEvent::ToggleRestoreSession(*GeneralSettings::as_ref(ctx).restore_session)
             }
+            Self::ToggleClaudeCodeAutoResume => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleClaudeCodeAutoResume".to_string(),
+                value: to_string(*GeneralSettings::as_ref(ctx).claude_code_auto_resume),
+            },
+            Self::ToggleClaudeCodeResumeAskFirst => TelemetryEvent::FeaturesPageAction {
+                action: "ToggleClaudeCodeResumeAskFirst".to_string(),
+                value: to_string(*GeneralSettings::as_ref(ctx).claude_code_resume_ask_first),
+            },
             Self::ToggleAutocompleteSymbols => TelemetryEvent::FeaturesPageAction {
                 action: "ToggleAutocompleteSymbols".to_string(),
                 value: to_string(*AppEditorSettings::as_ref(ctx).autocomplete_symbols),
@@ -1554,6 +1582,24 @@ impl TypedActionView for FeaturesPageView {
             ToggleRestoreSession => {
                 GeneralSettings::handle(ctx).update(ctx, |general_settings, ctx| {
                     report_if_error!(general_settings.restore_session.toggle_and_save_value(ctx))
+                })
+            }
+            ToggleClaudeCodeAutoResume => {
+                GeneralSettings::handle(ctx).update(ctx, |general_settings, ctx| {
+                    report_if_error!(
+                        general_settings
+                            .claude_code_auto_resume
+                            .toggle_and_save_value(ctx)
+                    )
+                })
+            }
+            ToggleClaudeCodeResumeAskFirst => {
+                GeneralSettings::handle(ctx).update(ctx, |general_settings, ctx| {
+                    report_if_error!(
+                        general_settings
+                            .claude_code_resume_ask_first
+                            .toggle_and_save_value(ctx)
+                    )
                 })
             }
             ToggleAutocompleteSymbols => {
@@ -2791,6 +2837,14 @@ impl FeaturesPageView {
             .is_supported_on_current_platform()
         {
             general_widgets.push(Box::new(SessionRestorationWidget::default()))
+        }
+        if FeatureFlag::ClaudeCodeSessionResume.is_enabled()
+            && general_settings
+                .claude_code_auto_resume
+                .is_supported_on_current_platform()
+        {
+            general_widgets.push(Box::new(ClaudeCodeAutoResumeWidget::default()));
+            general_widgets.push(Box::new(ClaudeCodeResumeAskFirstWidget::default()));
         }
 
         general_widgets.push(Box::new(SnackbarHeaderWidget::default()));
@@ -4776,6 +4830,104 @@ impl SettingsWidget for SnackbarHeaderWidget {
                 .build()
                 .on_click(move |ctx, _, _| {
                     ctx.dispatch_typed_action(FeaturesPageAction::ToggleSnackbar)
+                })
+                .finish(),
+            None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct ClaudeCodeAutoResumeWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for ClaudeCodeAutoResumeWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "claude code resume restore session pane conversation startup"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ui_builder = appearance.ui_builder();
+        render_body_item::<FeaturesPageAction>(
+            "Resume each restored pane's Claude Code conversation".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                ClaudeCodeAutoResume::storage_key(),
+                ClaudeCodeAutoResume::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            ui_builder
+                .switch(self.switch_state.clone())
+                .check(*GeneralSettings::as_ref(app).claude_code_auto_resume)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleClaudeCodeAutoResume);
+                })
+                .finish(),
+            None,
+        )
+    }
+}
+
+#[derive(Default)]
+struct ClaudeCodeResumeAskFirstWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for ClaudeCodeResumeAskFirstWidget {
+    type View = FeaturesPageView;
+
+    fn search_terms(&self) -> &str {
+        "claude code resume ask banner confirm restore"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let ui_builder = appearance.ui_builder();
+        let general_settings = GeneralSettings::as_ref(app);
+        let toggle_state = if *general_settings.claude_code_auto_resume {
+            ToggleState::Enabled
+        } else {
+            ToggleState::Disabled
+        };
+        render_body_item::<FeaturesPageAction>(
+            "Ask with a banner before resuming Claude Code".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                ClaudeCodeResumeAskFirst::storage_key(),
+                ClaudeCodeResumeAskFirst::sync_to_cloud(),
+                &mut view
+                    .button_mouse_states
+                    .local_only_icon_tooltip_states
+                    .borrow_mut(),
+                app,
+            ),
+            toggle_state,
+            appearance,
+            ui_builder
+                .switch(self.switch_state.clone())
+                .check(*general_settings.claude_code_resume_ask_first)
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(FeaturesPageAction::ToggleClaudeCodeResumeAskFirst);
                 })
                 .finish(),
             None,

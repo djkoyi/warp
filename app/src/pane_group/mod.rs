@@ -1714,6 +1714,12 @@ impl PaneGroup {
 
                 let terminal_view_id = terminal_view.id();
 
+                if let Some(claude_code_resume) = terminal_snapshot.claude_code_resume {
+                    terminal_view.update(ctx, |view, ctx| {
+                        view.restore_claude_code_session(claude_code_resume, ctx);
+                    });
+                }
+
                 let pane_data = TerminalPane::new(
                     uuid.0,
                     terminal_manager,
@@ -2189,6 +2195,7 @@ impl PaneGroup {
                             active_profile_id: None,
                             conversation_ids_to_restore: Vec::new(),
                             active_conversation_id: None,
+                            claude_code_resume: None,
                         })
                     }
                 };

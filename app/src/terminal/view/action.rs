@@ -339,6 +339,8 @@ pub enum TerminalAction {
     ClearMarkedText,
     HideTelemetryBannerPermanently,
     ShowInitializationBlock,
+    /// Runs the Claude Code resume offered in the restored pane's banner.
+    ResumeClaudeCodeSession,
     GenerateCodebaseIndex,
     /// This is for debugging, dev only for now
     LoadAgentModeConversation,
@@ -675,6 +677,7 @@ impl fmt::Debug for TerminalAction {
             ClearMarkedText => write!(f, "ClearMarkedText"),
             HideTelemetryBannerPermanently => write!(f, "HideTelemetryBannerPermanently"),
             ShowInitializationBlock => write!(f, "ShowInitializationBlock"),
+            ResumeClaudeCodeSession => write!(f, "ResumeClaudeCodeSession"),
             GenerateCodebaseIndex => write!(f, "GenerateIndexForRepo"),
             LoadAgentModeConversation => write!(f, "LoadAgentModeConversation"),
             ShowWarpifySettings => write!(f, "ShowWarpifySettings"),

@@ -69,6 +69,11 @@ impl CLIAgentSessionStatus {
 #[derive(Debug, Clone, Default)]
 pub struct CLIAgentSessionContext {
     pub cwd: Option<String>,
+    /// The first `cwd` reported by this agent process. Claude Code keys its transcripts by its
+    /// launch directory, while later events (including the `SessionStart` re-sent on `/compact`
+    /// and `/clear`) report wherever its Bash tool has `cd`'d to since, so only this value is
+    /// valid for `--resume`.
+    pub resume_cwd: Option<String>,
     pub project: Option<String>,
     pub session_id: Option<String>,
     pub tool_name: Option<String>,
@@ -221,6 +226,9 @@ impl CLIAgentSession {
     /// Applies an event to this session, updating context and status.
     /// Returns the new status if it changed, or `None` if the event was irrelevant.
     fn apply_event(&mut self, event: &CLIAgentEvent) -> Option<CLIAgentSessionStatus> {
+        if self.session_context.resume_cwd.is_none() {
+            self.session_context.resume_cwd = event.cwd.clone();
+        }
         self.session_context.cwd = event.cwd.clone().or(self.session_context.cwd.take());
         self.session_context.project = event
             .project
@@ -466,6 +474,9 @@ impl CLIAgentSessionsModel {
             session.plugin_version = plugin_version;
             session.remote_host = remote_host;
             session.should_auto_toggle_input = should_auto_toggle_input;
+            if session.session_context.resume_cwd.is_none() {
+                session.session_context.resume_cwd = cwd.clone();
+            }
             session.session_context.cwd = cwd.or(session.session_context.cwd.take());
             session.session_context.project = project.or(session.session_context.project.take());
             session.session_context.session_id =
@@ -479,6 +490,7 @@ impl CLIAgentSessionsModel {
                 agent,
                 status: CLIAgentSessionStatus::InProgress,
                 session_context: CLIAgentSessionContext {
+                    resume_cwd: cwd.clone(),
                     cwd,
                     project,
                     session_id,

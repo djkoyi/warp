@@ -31,6 +31,7 @@ use crate::persistence::{
 use crate::server::ids::{ClientId, ServerId};
 use crate::tab::SelectedTabColor;
 use crate::terminal::ShellLaunchData;
+use crate::terminal::claude_code_resume::ClaudeCodeResume;
 use crate::terminal::model::block::SerializedBlock;
 use crate::terminal::model::session::SessionId;
 use crate::themes::theme::AnsiColorIdentifier;
@@ -394,6 +395,7 @@ fn test_terminal_window_snapshot(vertical_tabs_panel_open: bool) -> WindowSnapsh
                     active_profile_id: None,
                     conversation_ids_to_restore: vec![],
                     active_conversation_id: None,
+                    claude_code_resume: None,
                 }),
             }),
             default_directory_color: None,
@@ -509,6 +511,7 @@ fn test_sqlite_round_trips_custom_vertical_tabs_title() {
                         active_profile_id: None,
                         conversation_ids_to_restore: vec![],
                         active_conversation_id: None,
+                        claude_code_resume: None,
                     }),
                 }),
                 default_directory_color: None,
@@ -675,6 +678,7 @@ fn test_sqlite_round_trips_tab_groups() {
                 active_profile_id: None,
                 conversation_ids_to_restore: vec![],
                 active_conversation_id: None,
+                claude_code_resume: None,
             }),
         }),
         default_directory_color: None,
@@ -703,6 +707,7 @@ fn test_sqlite_round_trips_tab_groups() {
                 active_profile_id: None,
                 conversation_ids_to_restore: vec![],
                 active_conversation_id: None,
+                claude_code_resume: None,
             }),
         }),
         default_directory_color: None,
@@ -799,6 +804,7 @@ fn test_sqlite_round_trips_pinned_state() {
                 active_profile_id: None,
                 conversation_ids_to_restore: vec![],
                 active_conversation_id: None,
+                claude_code_resume: None,
             }),
         }),
         default_directory_color: None,
@@ -827,6 +833,7 @@ fn test_sqlite_round_trips_pinned_state() {
                 active_profile_id: None,
                 conversation_ids_to_restore: vec![],
                 active_conversation_id: None,
+                claude_code_resume: None,
             }),
         }),
         default_directory_color: None,
@@ -855,6 +862,7 @@ fn test_sqlite_round_trips_pinned_state() {
                 active_profile_id: None,
                 conversation_ids_to_restore: vec![],
                 active_conversation_id: None,
+                claude_code_resume: None,
             }),
         }),
         default_directory_color: None,
@@ -1158,4 +1166,45 @@ fn team_member_is_disabled_round_trips_through_sqlite_cache() {
         .expect("disabled member should be present");
     assert!(!active_member.is_disabled);
     assert!(disabled_member.is_disabled);
+}
+
+#[test]
+fn test_sqlite_round_trips_claude_code_resume() {
+    let tempdir = tempfile::tempdir().expect("tempdir should be created");
+    let database_path = tempdir.path().join("warp.sqlite");
+    let mut conn = setup_database(&database_path).expect("database should initialize");
+    let resume = ClaudeCodeResume {
+        session_id: "0f6c1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b".to_owned(),
+        cwd: Some("/tmp/it's a project".to_owned()),
+    };
+    let mut window = test_terminal_window_snapshot(false);
+    let PaneNodeSnapshot::Leaf(LeafSnapshot {
+        contents: LeafContents::Terminal(terminal),
+        ..
+    }) = &mut window.tabs[0].root
+    else {
+        panic!("test window should contain a terminal leaf");
+    };
+    terminal.claude_code_resume = Some(resume.clone());
+
+    let app_state = AppState {
+        windows: vec![window],
+        active_window_index: Some(0),
+        block_lists: Default::default(),
+        running_mcp_servers: Default::default(),
+    };
+    save_app_state(&mut conn, &app_state).expect("app state should save");
+
+    let restored = read_sqlite_data(&mut conn, None, PersistedDataScope::Full)
+        .expect("app state should load")
+        .app_state
+        .expect("app state should be present for the full scope");
+    let PaneNodeSnapshot::Leaf(LeafSnapshot {
+        contents: LeafContents::Terminal(terminal),
+        ..
+    }) = &restored.windows[0].tabs[0].root
+    else {
+        panic!("restored window should contain a terminal leaf");
+    };
+    assert_eq!(terminal.claude_code_resume, Some(resume));
 }

@@ -179,6 +179,7 @@ use warpui::text::SelectionType;
 use warpui::ui_components::components::UiComponent;
 use warpui::units::{IntoLines, IntoPixels, Lines, Pixels};
 use warpui::windowing::WindowManager;
+use warpui::windowing::state::ApplicationStage;
 use warpui::{
     AccessibilityData, AppContext, BlurContext, CursorInfo, Element, Entity, EntityId,
     EventContext, FocusContext, ModelAsRef, ModelHandle, SingletonEntity, Tracked, TypedActionView,
@@ -400,6 +401,7 @@ use crate::terminal::block_list_viewport::{
     ScrollState, ViewportState,
 };
 use crate::terminal::bootstrap::init_subshell_command;
+use crate::terminal::claude_code_resume::{ClaudeCodeResume, PendingClaudeCodeResume};
 use crate::terminal::cli_agent_sessions::event::{
     CLI_AGENT_NOTIFICATION_SENTINEL, CLIAgentEvent, CLIAgentEventPayload, CLIAgentEventSource,
     CLIAgentEventType, parse_event,
@@ -2640,6 +2642,15 @@ pub struct TerminalView {
     enter_agent_view_after_pending_commands: bool,
     slow_bootstrap_banner: ViewHandle<Banner<TerminalAction>>,
     is_slow_bootstrap_banner_open: bool,
+    /// Claude Code conversation restored with this pane that has not finished yet. Persisted
+    /// in place of a live session so a restart before Claude reports back (or a Claude Code
+    /// without the Warp plugin) does not lose it.
+    pending_claude_code_resume: Option<PendingClaudeCodeResume>,
+    /// One-click banner shown while `pending_claude_code_resume` is `Offered`.
+    claude_code_resume_banner: Option<ViewHandle<Banner<TerminalAction>>>,
+    /// The resume record most recently sent to the app-state writer, so plugin events that do
+    /// not change it don't trigger a full app-state save.
+    last_saved_claude_code_resume: Option<ClaudeCodeResume>,
     /// Timer that auto-dismisses the slow-bootstrap banner after
     /// [`SLOW_BOOTSTRAP_BANNER_AUTO_DISMISS_DURATION`]. Held so it can be
     /// aborted when the banner is hidden for any other reason (manual
@@ -4420,6 +4431,9 @@ impl TerminalView {
             enter_agent_view_after_pending_commands: false,
             slow_bootstrap_banner,
             is_slow_bootstrap_banner_open: false,
+            pending_claude_code_resume: None,
+            claude_code_resume_banner: None,
+            last_saved_claude_code_resume: None,
             slow_bootstrap_banner_auto_dismiss_handle: None,
             incompatible_configuration_banner,
             is_incompatible_configuration_banner_open: false,
@@ -12768,6 +12782,13 @@ impl TerminalView {
                     CLIAgentSessionsModel::handle(ctx).update(ctx, |sessions_model, ctx| {
                         sessions_model.remove_session(self.view_id, ctx);
                     });
+                    if matches!(
+                        self.pending_claude_code_resume,
+                        Some(PendingClaudeCodeResume::Submitted(_))
+                    ) {
+                        self.pending_claude_code_resume = None;
+                    }
+                    self.save_claude_code_resume_if_changed(ctx);
                 }
 
                 let next_block_index = block_completed_event.block_index + BlockIndex::from(1);
@@ -14355,6 +14376,11 @@ impl TerminalView {
         {
             self.update_git_status_subscription(ctx);
         }
+        if event.terminal_view_id() == self.view_id
+            && matches!(event, CLIAgentSessionsModelEvent::SessionUpdated { .. })
+        {
+            self.save_claude_code_resume_if_changed(ctx);
+        }
 
         let CLIAgentSessionsModelEvent::StatusChanged {
             terminal_view_id,
@@ -14496,6 +14522,7 @@ impl TerminalView {
 
         self.is_login_shell_bootstrapped = true;
         self.hide_slow_bootstrap_banner(ctx);
+        self.start_pending_claude_code_resume(&session, ctx);
 
         if self.should_display_vim_banner(&session, ctx) {
             self.insert_vim_mode_banner(ctx);
@@ -16944,6 +16971,163 @@ impl TerminalView {
     pub fn execute_command_or_set_pending(&mut self, command: &str, ctx: &mut ViewContext<Self>) {
         self.set_pending_command(command, ctx);
         self.execute_pending_command((), ctx);
+    }
+
+    /// Arranges for `resume` to run in this pane once its login shell bootstraps, unless Claude
+    /// Code auto-resume is turned off.
+    pub fn restore_claude_code_session(&mut self, resume: ClaudeCodeResume, ctx: &AppContext) {
+        if !FeatureFlag::ClaudeCodeSessionResume.is_enabled()
+            || !*GeneralSettings::as_ref(ctx).claude_code_auto_resume
+        {
+            return;
+        }
+        self.last_saved_claude_code_resume = Some(resume.clone());
+        self.pending_claude_code_resume = Some(PendingClaudeCodeResume::AwaitingBootstrap(resume));
+    }
+
+    /// The Claude Code conversation this pane should resume after a restart, if any.
+    pub fn claude_code_resume_to_persist(&self, ctx: &AppContext) -> Option<ClaudeCodeResume> {
+        if !FeatureFlag::ClaudeCodeSessionResume.is_enabled() {
+            return None;
+        }
+        CLIAgentSessionsModel::as_ref(ctx)
+            .session(self.view_id)
+            .and_then(ClaudeCodeResume::from_live_session)
+            .or_else(|| {
+                self.pending_claude_code_resume
+                    .as_ref()
+                    .map(|pending| pending.resume().clone())
+            })
+    }
+
+    fn start_pending_claude_code_resume(&mut self, session: &Session, ctx: &mut ViewContext<Self>) {
+        let resume = match self.pending_claude_code_resume.take() {
+            Some(PendingClaudeCodeResume::AwaitingBootstrap(resume)) => resume,
+            other => {
+                self.pending_claude_code_resume = other;
+                return;
+            }
+        };
+        // Only the pane's own local login shell can host the conversation. If the first
+        // bootstrap is anything else (e.g. rc files that exec into ssh), drop the resume.
+        let is_local_login_shell = matches!(session.session_type(), SessionType::Local)
+            && session.subshell_info().is_none();
+        if !is_local_login_shell {
+            self.save_claude_code_resume_if_changed(ctx);
+            return;
+        }
+
+        let general_settings = GeneralSettings::as_ref(ctx);
+        let ask_first = *general_settings.claude_code_resume_ask_first;
+        let command = resume.command(
+            general_settings.claude_code_resume_flags.value(),
+            session.shell().shell_type(),
+        );
+        if ask_first {
+            self.show_claude_code_resume_banner(resume, command, ctx);
+        } else {
+            self.submit_claude_code_resume(resume, &command, ctx);
+        }
+    }
+
+    fn submit_claude_code_resume(
+        &mut self,
+        resume: ClaudeCodeResume,
+        command: &str,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        self.pending_claude_code_resume = Some(PendingClaudeCodeResume::Submitted(resume));
+        self.execute_command_or_set_pending(command, ctx);
+    }
+
+    fn show_claude_code_resume_banner(
+        &mut self,
+        resume: ClaudeCodeResume,
+        command: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let short_session_id: String = resume.session_id.chars().take(8).collect();
+        let banner = ctx.add_typed_action_view(|_| {
+            Banner::<TerminalAction>::new_with_buttons(
+                BannerTextContent::plain_text(format!(
+                    "This pane was running Claude Code session {short_session_id}.  "
+                )),
+                vec![BannerTextButton::new(
+                    "Resume".to_string(),
+                    Rc::new(|event_ctx, _ctx, _position| {
+                        event_ctx.dispatch_typed_action(BannerAction::<TerminalAction>::Action(
+                            TerminalAction::ResumeClaudeCodeSession,
+                        ));
+                    }),
+                )],
+                true,
+            )
+        });
+        ctx.subscribe_to_view(&banner, |me, _, event, ctx| {
+            me.handle_claude_code_resume_banner_event(event, ctx);
+        });
+        self.claude_code_resume_banner = Some(banner);
+        self.pending_claude_code_resume =
+            Some(PendingClaudeCodeResume::Offered { resume, command });
+        ctx.notify();
+    }
+
+    fn handle_claude_code_resume_banner_event(
+        &mut self,
+        event: &BannerEvent<TerminalAction>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        match event {
+            BannerEvent::Dismiss(_) => self.dismiss_claude_code_resume_banner(ctx),
+            BannerEvent::Action(terminal_action) => self.handle_action(terminal_action, ctx),
+        }
+    }
+
+    fn resume_offered_claude_code_session(&mut self, ctx: &mut ViewContext<Self>) {
+        let (resume, command) = match self.pending_claude_code_resume.take() {
+            Some(PendingClaudeCodeResume::Offered { resume, command }) => (resume, command),
+            other => {
+                self.pending_claude_code_resume = other;
+                return;
+            }
+        };
+        self.claude_code_resume_banner = None;
+        // The command was built for the login shell; never type it into an SSH session or
+        // subshell the user has entered since the banner appeared.
+        if self.active_session_is_local(ctx) == Some(true) {
+            self.submit_claude_code_resume(resume, &command, ctx);
+        } else {
+            self.save_claude_code_resume_if_changed(ctx);
+        }
+        ctx.notify();
+    }
+
+    fn dismiss_claude_code_resume_banner(&mut self, ctx: &mut ViewContext<Self>) {
+        if matches!(
+            self.pending_claude_code_resume,
+            Some(PendingClaudeCodeResume::Offered { .. })
+        ) {
+            self.pending_claude_code_resume = None;
+        }
+        self.claude_code_resume_banner = None;
+        self.save_claude_code_resume_if_changed(ctx);
+        ctx.notify();
+    }
+
+    /// Saves app state when this pane's resume record changed, so a restart right after a Claude
+    /// Code session starts or ends restores the right thing even if nothing else triggered a save.
+    fn save_claude_code_resume_if_changed(&mut self, ctx: &mut ViewContext<Self>) {
+        // Panes are torn down while the app terminates; saving then would erase the
+        // conversations that the next launch should resume.
+        if ctx.windows().stage() == ApplicationStage::Terminating {
+            return;
+        }
+        let current = self.claude_code_resume_to_persist(ctx);
+        if current == self.last_saved_claude_code_resume {
+            return;
+        }
+        self.last_saved_claude_code_resume = current;
+        ctx.dispatch_global_action("workspace:save_app", ());
     }
 
     fn hide_slow_bootstrap_banner(&mut self, ctx: &mut ViewContext<Self>) {
@@ -27732,6 +27916,10 @@ impl TypedActionView for TerminalView {
                 "Showed initialization block",
                 WarpA11yRole::TextareaRole,
             )),
+            ResumeClaudeCodeSession => Custom(AccessibilityContent::new_without_help(
+                "Resumed Claude Code session",
+                WarpA11yRole::ButtonRole,
+            )),
             ShowWarpifySettings => Custom(AccessibilityContent::new_without_help(
                 "Opened Warpify Settings",
                 WarpA11yRole::ButtonRole,
@@ -28515,6 +28703,7 @@ impl TypedActionView for TerminalView {
             ClearMarkedText => self.clear_marked_text_on_terminal(ctx),
             HideTelemetryBannerPermanently => self.hide_telemetry_banner_permanently(ctx),
             ShowInitializationBlock => self.show_initialization_block(),
+            ResumeClaudeCodeSession => self.resume_offered_claude_code_session(ctx),
             GenerateCodebaseIndex => {
                 self.generate_codebase_index(ctx);
             }
@@ -29450,7 +29639,9 @@ impl View for TerminalView {
 
             // Only show one of these banners at a time, to avoid them visually
             // stacking on top of each other.
-            if self.is_slow_bootstrap_banner_open
+            if let Some(claude_code_resume_banner) = &self.claude_code_resume_banner {
+                stack.add_child(ChildView::new(claude_code_resume_banner).finish());
+            } else if self.is_slow_bootstrap_banner_open
                 && ContextFlag::ShowSlowShellStartupBanner.is_enabled()
             {
                 stack.add_child(ChildView::new(&self.slow_bootstrap_banner).finish());

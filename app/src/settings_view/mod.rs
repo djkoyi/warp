@@ -496,6 +496,8 @@ pub mod flags {
 
     pub const LINUX_SELECTION_CLIPBOARD_FLAG: &str = "Linux_Selection_Clipboard";
     pub const RESTORE_SESSION_CONTEXT_FLAG: &str = "Restore_Sessions";
+    pub const CLAUDE_CODE_AUTO_RESUME_CONTEXT_FLAG: &str = "Claude_Code_Auto_Resume";
+    pub const CLAUDE_CODE_RESUME_ASK_FIRST_CONTEXT_FLAG: &str = "Claude_Code_Resume_Ask_First";
     pub const HONOR_PS1_CONTEXT_FLAG: &str = "Honor_PS1";
     pub const GIT_PROMPT_CONTEXT_FLAG: &str = "Git_Prompt";
     pub const AUTOCOMPLETE_SYMBOLS_CONTEXT_FLAG: &str = "Autocomplete_Symbols";
