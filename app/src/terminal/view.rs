@@ -25345,11 +25345,10 @@ impl TerminalView {
         alt_screen_element =
             alt_screen_element.with_shared_session_presence(self.shared_session_presence_manager());
 
-        // Pass voice input toggle key if the CLI agent footer should be rendered
+        // Pass the voice input toggle key whenever a program is running in the
+        // foreground, not only when Warp recognized it as a CLI agent.
         #[cfg(feature = "voice_input")]
-        if self.should_render_use_agent_footer(model, app)
-            && self.use_agent_footer.as_ref(app).has_cli_agent(app)
-        {
+        if self.should_dictate_into_running_program(model, app) {
             let voice_key = AISettings::as_ref(app)
                 .voice_input_toggle_key
                 .value()
@@ -25613,11 +25612,10 @@ impl TerminalView {
             element = element.with_hide_cursor_cell();
         }
 
-        // Pass voice input toggle key if the CLI agent footer should be rendered
+        // Pass the voice input toggle key whenever a program is running in the
+        // foreground, not only when Warp recognized it as a CLI agent.
         #[cfg(feature = "voice_input")]
-        if self.should_render_use_agent_footer(model, app)
-            && self.use_agent_footer.as_ref(app).has_cli_agent(app)
-        {
+        if self.should_dictate_into_running_program(model, app) {
             let voice_key = AISettings::as_ref(app)
                 .voice_input_toggle_key
                 .value()
@@ -28455,8 +28453,16 @@ impl TypedActionView for TerminalView {
                 // For CLI agents, route through the footer's self-contained
                 // voice flow (records + writes transcription to PTY). For
                 // the regular editor, fall back to the editor-based flow.
+                // Also take the PTY path when Warp did not recognize the program
+                // (warpdotdev/warp#16200) but one is running in the foreground.
                 let has_cli_agent = self.use_agent_footer.as_ref(ctx).has_cli_agent(ctx);
-                if has_cli_agent {
+                let program_running = self
+                    .model
+                    .lock()
+                    .block_list()
+                    .active_block()
+                    .is_active_and_long_running();
+                if has_cli_agent || program_running {
                     let footer = self.input.as_ref(ctx).agent_input_footer().clone();
                     footer.update(ctx, |footer, ctx| {
                         footer.toggle_cli_voice_input(source, ctx);

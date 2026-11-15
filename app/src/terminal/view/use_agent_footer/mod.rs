@@ -296,6 +296,27 @@ impl TerminalView {
         CLIAgentSessionsModel::as_ref(app).is_input_open(self.view_id)
     }
 
+    /// Whether the voice toggle key should dictate into the program running in
+    /// this pane.
+    ///
+    /// Upstream only does this once Warp has recognized the program as a CLI
+    /// agent and is showing its toolbar. Recognition is intermittent (see
+    /// warpdotdev/warp#16200, e.g. `claude --dangerously-skip-permissions`
+    /// run after another command), and when it fails the voice key is never
+    /// delivered and dictation falls back to Warp's own input. Any long-running
+    /// foreground program counts here, so dictation always lands in the prompt
+    /// the user is looking at.
+    #[cfg(feature = "voice_input")]
+    pub(super) fn should_dictate_into_running_program(
+        &self,
+        model: &TerminalModel,
+        app: &AppContext,
+    ) -> bool {
+        (self.should_render_use_agent_footer(model, app)
+            && self.use_agent_footer.as_ref(app).has_cli_agent(app))
+            || model.block_list().active_block().is_active_and_long_running()
+    }
+
     /// Checks if the footer should be rendered.
     /// Reads the CLI agent from the sessions model (single source of truth).
     pub(super) fn should_render_use_agent_footer(
@@ -791,6 +812,24 @@ impl TerminalView {
             .session(self.view_id)
             .map(|s| s.agent)
         else {
+            // Warp did not recognize the running program as a CLI agent
+            // (warpdotdev/warp#16200). Still type the dictation into it, as long
+            // as a program is running in the foreground. Newlines become spaces
+            // so a multi-line transcription cannot submit the prompt on its own.
+            let program_running = self
+                .model
+                .lock()
+                .block_list()
+                .active_block()
+                .is_active_and_long_running();
+            if program_running && !text.is_empty() {
+                let single_line = text.replace(['\r', '\n'], " ");
+                self.write_cli_agent_text(
+                    single_line.as_bytes(),
+                    RichInputSubmitStrategy::Inline,
+                    ctx,
+                );
+            }
             return;
         };
 

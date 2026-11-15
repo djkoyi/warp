@@ -2984,7 +2984,24 @@ impl Input {
             match event {
                 #[cfg(feature = "voice_input")]
                 AgentInputFooterEvent::ToggleVoiceInput(from) => {
-                    me.toggle_voice_input(from, ctx);
+                    // While a program such as Claude Code runs in the foreground,
+                    // dictate into it rather than into Warp's own input, even if
+                    // Warp did not recognize it as a CLI agent
+                    // (warpdotdev/warp#16200).
+                    let program_running = me
+                        .model
+                        .lock()
+                        .block_list()
+                        .active_block()
+                        .is_active_and_long_running();
+                    if program_running {
+                        let footer = me.agent_input_footer.clone();
+                        footer.update(ctx, |footer, ctx| {
+                            footer.toggle_cli_voice_input(from, ctx);
+                        });
+                    } else {
+                        me.toggle_voice_input(from, ctx);
+                    }
                 }
                 AgentInputFooterEvent::SelectFile => {
                     me.select_image(ctx);
