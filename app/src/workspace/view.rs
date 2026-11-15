@@ -23286,6 +23286,14 @@ impl Workspace {
             context.set.insert(flags::RESTORE_SESSION_CONTEXT_FLAG);
         }
 
+        if *general_settings.claude_code_auto_resume {
+            context.set.insert(flags::CLAUDE_CODE_AUTO_RESUME_CONTEXT_FLAG);
+        }
+
+        if *general_settings.claude_code_resume_ask_first {
+            context.set.insert(flags::CLAUDE_CODE_RESUME_ASK_FIRST_CONTEXT_FLAG);
+        }
+
         if *session_settings.honor_ps1 {
             context.set.insert(flags::HONOR_PS1_CONTEXT_FLAG);
         }

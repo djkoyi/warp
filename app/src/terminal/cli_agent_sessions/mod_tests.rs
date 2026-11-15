@@ -1456,3 +1456,28 @@ fn second_ctrl_c_while_armed_reuses_the_existing_window() {
         });
     });
 }
+
+#[test]
+fn resume_cwd_stays_pinned_to_launch_directory() {
+    // A `/compact` or `/clear` re-sends `session_start` with whatever directory Claude's Bash
+    // tool has drifted to; resuming from there would open an empty project.
+    let mut session = blocked_claude_session_with_permission_state();
+    let event = |event, session_id: &str, cwd: &str| CLIAgentEvent {
+        source: CLIAgentEventSource::RichPlugin,
+        v: 1,
+        agent: CLIAgent::Claude,
+        event,
+        session_id: Some(session_id.to_owned()),
+        cwd: Some(cwd.to_owned()),
+        project: None,
+        payload: CLIAgentEventPayload::default(),
+    };
+
+    session.apply_event(&event(CLIAgentEventType::SessionStart, "first", "/repo"));
+    session.apply_event(&event(CLIAgentEventType::SessionStart, "first", "/repo/sub"));
+    session.apply_event(&event(CLIAgentEventType::SessionStart, "second", "/elsewhere"));
+
+    assert_eq!(session.session_context.session_id.as_deref(), Some("second"));
+    assert_eq!(session.session_context.cwd.as_deref(), Some("/elsewhere"));
+    assert_eq!(session.session_context.resume_cwd.as_deref(), Some("/repo"));
+}

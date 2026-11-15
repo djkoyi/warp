@@ -798,6 +798,9 @@ pub enum FeatureFlag {
     /// When disabled, Codex uses native OSC9 notifications.
     CodexPlugin,
 
+    /// Resumes each restored pane's own Claude Code conversation after Warp restarts.
+    ClaudeCodeSessionResume,
+
     /// Enables the install/update chip for the Gemini CLI Warp extension.
     /// Requires HOANotifications to also be enabled.
     GeminiNotifications,

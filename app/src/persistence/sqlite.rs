@@ -105,6 +105,7 @@ use crate::settings_view::SettingsSection;
 use crate::suggestions::ignored_suggestions_model::SuggestionType;
 use crate::tab::SelectedTabColor;
 use crate::terminal::ShellLaunchData;
+use crate::terminal::claude_code_resume::ClaudeCodeResume;
 use crate::terminal::history::PersistedCommand;
 use crate::themes::theme::AnsiColorIdentifier;
 use crate::workflows::WorkflowId;
@@ -1270,6 +1271,14 @@ fn save_pane_state(
                 active_conversation_id: terminal_snapshot
                     .active_conversation_id
                     .map(|id| id.to_string()),
+                claude_code_session_id: terminal_snapshot
+                    .claude_code_resume
+                    .as_ref()
+                    .map(|resume| resume.session_id.clone()),
+                claude_code_cwd: terminal_snapshot
+                    .claude_code_resume
+                    .as_ref()
+                    .and_then(|resume| resume.cwd.clone()),
             };
 
             diesel::insert_into(schema::terminal_panes::dsl::terminal_panes)
@@ -2240,6 +2249,11 @@ fn read_node(conn: &mut SqliteConnection, node: model::PaneNode) -> Result<PaneN
                         .active_conversation_id
                         .and_then(|id_str| AIConversationId::try_from(id_str).ok());
 
+                    let claude_code_resume = ClaudeCodeResume::from_persisted(
+                        terminal_pane.claude_code_session_id,
+                        terminal_pane.claude_code_cwd,
+                    );
+
                     LeafContents::Terminal(TerminalPaneSnapshot {
                         uuid: terminal_pane.uuid,
                         cwd: terminal_pane.cwd,
@@ -2251,6 +2265,7 @@ fn read_node(conn: &mut SqliteConnection, node: model::PaneNode) -> Result<PaneN
                         active_profile_id,
                         conversation_ids_to_restore,
                         active_conversation_id,
+                        claude_code_resume,
                     })
                 }
                 NOTEBOOK_PANE_KIND => {
