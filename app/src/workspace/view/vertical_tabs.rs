@@ -6328,6 +6328,15 @@ pub(super) fn render_settings_popup(
             theme,
         ));
     }
+    popup_col.add_child(render_show_toggle_option(
+        "Uso de la cuenta (barra superior)",
+        *tab_settings.show_account_usage_chip,
+        state.show_account_usage_chip_mouse_state.clone(),
+        WorkspaceAction::ToggleShowAccountUsageChip,
+        None,
+        appearance,
+        theme,
+    ));
     popup_col.add_child(make_divider(theme));
     popup_col.add_child(view_as_header);
     popup_col.add_child(view_as_segmented_control_row);
