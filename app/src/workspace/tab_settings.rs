@@ -522,6 +522,16 @@ define_settings_group!(TabSettings, settings: [
         toml_path: "claude.command",
         description: "Command run in tabs opened by the Claude tab and workspace actions.",
     },
+    claude_open_on_new_window: ClaudeOpenOnNewWindow {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "claude.open_on_new_window",
+        description: "Open a Claude Code tab (instead of a plain terminal) when a window starts with nothing to restore.",
+    },
     claude_workspaces: ClaudeWorkspaces {
         type: HashMap<String, Vec<String>>,
         default: HashMap::new(),
