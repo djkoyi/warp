@@ -4019,6 +4019,11 @@ impl Workspace {
             | TabSettingsChangedEvent::HideTitleBarSearchBarInVerticalTabs { .. } => {
                 ctx.notify();
             }
+            TabSettingsChangedEvent::ShowPuenteStatusChip { .. }
+            | TabSettingsChangedEvent::PuenteStatusScript { .. } => {
+                self.restart_puente_poller(ctx);
+                ctx.notify();
+            }
             TabSettingsChangedEvent::VerticalTabsShowDetailsOnHover { .. } => {
                 if !*TabSettings::as_ref(ctx).vertical_tabs_show_details_on_hover {
                     self.vertical_tabs_panel.clear_detail_sidecar();
