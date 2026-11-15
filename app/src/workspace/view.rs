@@ -21330,6 +21330,94 @@ impl Workspace {
         Shrinkable::new(1.0, inner).finish()
     }
 
+    /// Renders the global account-usage chip shown in the top bar beside the search: the account
+    /// 5h and 7d rate-limit usage and the accumulated cost across every live Claude session. Hover
+    /// reveals a tooltip with each limit's reset countdown. Returns `None` (chip hidden) when the
+    /// meters are disabled or no live session has reported usage yet.
+    fn render_global_usage_chip(
+        &self,
+        appearance: &Appearance,
+        ctx: &AppContext,
+    ) -> Option<Box<dyn Element>> {
+        if !meters_ui::meters_enabled(ctx) {
+            return None;
+        }
+        let global = CLIAgentSessionsModel::as_ref(ctx).global_meters()?;
+        let segments = meters_ui::global_chip_segments(&global);
+        if segments.is_empty() {
+            return None;
+        }
+
+        let theme = appearance.theme();
+        let label = meters_ui::render_inline_segments(&segments, 12., appearance);
+
+        let tooltip_lines = meters_ui::global_chip_tooltip_lines(&global, now_epoch_secs());
+        let ui_font_family = appearance.ui_font_family();
+        let tooltip_bg = theme.tooltip_background();
+        let tooltip_fg = theme.background().into_solid();
+        let tooltip_outline = theme.outline();
+        let render_tooltip = move || -> Box<dyn Element> {
+            let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Start);
+            for line in tooltip_lines {
+                column.add_child(
+                    Text::new_inline(line, ui_font_family, 10.)
+                        .with_color(tooltip_fg)
+                        .finish(),
+                );
+            }
+            Container::new(column.finish())
+                .with_background_color(tooltip_bg)
+                .with_border(Border::all(1.).with_border_fill(tooltip_outline))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+                .with_padding_left(8.)
+                .with_padding_right(8.)
+                .with_padding_top(4.)
+                .with_padding_bottom(4.)
+                .finish()
+        };
+
+        let default_styles = UiComponentStyles {
+            font_color: Some(theme.sub_text_color(theme.background()).into()),
+            font_size: Some(12.),
+            font_weight: Some(Weight::Medium),
+            font_family_id: Some(ui_font_family),
+            height: Some(24.),
+            background: Some(internal_colors::fg_overlay_1(theme)),
+            border_radius: Some(CornerRadius::with_all(Radius::Pixels(4.))),
+            border_width: Some(0.),
+            padding: Some(Coords {
+                top: 0.,
+                bottom: 0.,
+                left: 8.,
+                right: 8.,
+            }),
+            ..Default::default()
+        };
+        let hover_styles = UiComponentStyles {
+            background: Some(internal_colors::fg_overlay_2(theme)),
+            ..default_styles
+        };
+
+        let chip = Button::new(
+            self.mouse_states.global_usage_chip.clone(),
+            default_styles,
+            Some(hover_styles),
+            None,
+            None,
+        )
+        .with_custom_label(label)
+        .with_cursor(None)
+        .with_tooltip(render_tooltip)
+        .build()
+        .finish();
+
+        Some(
+            Container::new(chip)
+                .with_margin_left(TAB_BAR_PADDING_LEFT)
+                .finish(),
+        )
+    }
+
     fn render_title_bar_search_bar(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
         let text_color = theme.sub_text_color(theme.background());
