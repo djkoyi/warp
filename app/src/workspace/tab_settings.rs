@@ -5,6 +5,8 @@ use settings::macros::define_settings_group;
 use settings::{RespectUserSyncSetting, SupportedPlatforms, SyncToCloud};
 use warp_core::ui::theme::AnsiColorIdentifier;
 
+use crate::terminal::cli_agent_sessions::tab_details::ClaudeTabField;
+
 #[derive(
     Default,
     Debug,
@@ -616,12 +618,97 @@ define_settings_group!(TabSettings, settings: [
         toml_path: "appearance.vertical_tabs.show_details_on_hover",
         description: "Whether to show a details sidecar when hovering over a vertical tab.",
     },
+    vertical_tabs_claude_show_model: VerticalTabsClaudeShowModel {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "appearance.vertical_tabs.claude.show_model",
+        description: "Whether vertical tabs of Claude Code sessions show the Claude Code model.",
+    },
+    vertical_tabs_claude_show_context: VerticalTabsClaudeShowContext {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "appearance.vertical_tabs.claude.show_context",
+        description: "Whether vertical tabs of Claude Code sessions show the Claude Code context window usage.",
+    },
+    vertical_tabs_claude_show_tokens: VerticalTabsClaudeShowTokens {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "appearance.vertical_tabs.claude.show_tokens",
+        description: "Whether vertical tabs of Claude Code sessions show the Claude Code session token count.",
+    },
+    vertical_tabs_claude_show_cost: VerticalTabsClaudeShowCost {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "appearance.vertical_tabs.claude.show_cost",
+        description: "Whether vertical tabs of Claude Code sessions show the Claude Code session cost.",
+    },
+    vertical_tabs_claude_show_rate_limits: VerticalTabsClaudeShowRateLimits {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "appearance.vertical_tabs.claude.show_rate_limits",
+        description: "Whether vertical tabs of Claude Code sessions show the Claude Code 5-hour and 7-day plan limits.",
+    },
+    vertical_tabs_claude_show_lines: VerticalTabsClaudeShowLines {
+        type: bool,
+        default: false,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "appearance.vertical_tabs.claude.show_lines",
+        description: "Whether vertical tabs of Claude Code sessions show the lines changed by Claude Code.",
+    },
+    vertical_tabs_claude_show_status: VerticalTabsClaudeShowStatus {
+        type: bool,
+        default: true,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "appearance.vertical_tabs.claude.show_status",
+        description: "Whether vertical tabs of Claude Code sessions show the Claude Code status.",
+    },
     header_toolbar_chip_selection: HeaderToolbarChipSelection,
     new_tab_placement: NewTabPlacement,
     workspace_decoration_visibility: WorkspaceDecorationVisibility,
     close_button_position: TabCloseButtonPosition,
     directory_tab_colors: DirectoryTabColors,
 ]);
+
+impl TabSettings {
+    /// Whether vertical tabs of Claude Code sessions show `field`.
+    pub fn claude_tab_field_enabled(&self, field: ClaudeTabField) -> bool {
+        match field {
+            ClaudeTabField::Model => *self.vertical_tabs_claude_show_model,
+            ClaudeTabField::Context => *self.vertical_tabs_claude_show_context,
+            ClaudeTabField::Tokens => *self.vertical_tabs_claude_show_tokens,
+            ClaudeTabField::Cost => *self.vertical_tabs_claude_show_cost,
+            ClaudeTabField::RateLimits => *self.vertical_tabs_claude_show_rate_limits,
+            ClaudeTabField::Lines => *self.vertical_tabs_claude_show_lines,
+            ClaudeTabField::Status => *self.vertical_tabs_claude_show_status,
+        }
+    }
+}
 
 #[cfg(test)]
 #[path = "tab_settings_tests.rs"]

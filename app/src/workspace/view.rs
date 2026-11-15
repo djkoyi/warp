@@ -399,6 +399,7 @@ use crate::terminal::claude_code_resume::ClaudeCodeResume;
 use crate::terminal::cli_agent_sessions::meters_ui::{self, MeterSegment};
 #[cfg(not(target_family = "wasm"))]
 use crate::terminal::cli_agent_sessions::plugin_manager::{PluginModalKind, plugin_manager_for};
+use crate::terminal::cli_agent_sessions::tab_details::ClaudeTabField;
 use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, CLIAgentSessionsModelEvent};
 use crate::terminal::enable_auto_reload_modal::{
     EnableAutoReloadModal, EnableAutoReloadModalEvent,
@@ -3966,6 +3967,13 @@ impl Workspace {
             }
             | TabSettingsChangedEvent::VerticalTabsShowPrLink { .. }
             | TabSettingsChangedEvent::VerticalTabsShowDiffStats { .. }
+            | TabSettingsChangedEvent::VerticalTabsClaudeShowModel { .. }
+            | TabSettingsChangedEvent::VerticalTabsClaudeShowContext { .. }
+            | TabSettingsChangedEvent::VerticalTabsClaudeShowTokens { .. }
+            | TabSettingsChangedEvent::VerticalTabsClaudeShowCost { .. }
+            | TabSettingsChangedEvent::VerticalTabsClaudeShowRateLimits { .. }
+            | TabSettingsChangedEvent::VerticalTabsClaudeShowLines { .. }
+            | TabSettingsChangedEvent::VerticalTabsClaudeShowStatus { .. }
             | TabSettingsChangedEvent::HideTitleBarSearchBarInVerticalTabs { .. } => {
                 ctx.notify();
             }
@@ -25415,6 +25423,35 @@ impl TypedActionView for Workspace {
                     ),
                     ctx
                 );
+                ctx.notify();
+            }
+            ToggleVerticalTabsClaudeField(field) => {
+                TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let new_value = !settings.claude_tab_field_enabled(*field);
+                    let _ = match field {
+                        ClaudeTabField::Model => settings
+                            .vertical_tabs_claude_show_model
+                            .set_value(new_value, ctx),
+                        ClaudeTabField::Context => settings
+                            .vertical_tabs_claude_show_context
+                            .set_value(new_value, ctx),
+                        ClaudeTabField::Tokens => settings
+                            .vertical_tabs_claude_show_tokens
+                            .set_value(new_value, ctx),
+                        ClaudeTabField::Cost => settings
+                            .vertical_tabs_claude_show_cost
+                            .set_value(new_value, ctx),
+                        ClaudeTabField::RateLimits => settings
+                            .vertical_tabs_claude_show_rate_limits
+                            .set_value(new_value, ctx),
+                        ClaudeTabField::Lines => settings
+                            .vertical_tabs_claude_show_lines
+                            .set_value(new_value, ctx),
+                        ClaudeTabField::Status => settings
+                            .vertical_tabs_claude_show_status
+                            .set_value(new_value, ctx),
+                    };
+                });
                 ctx.notify();
             }
             ToggleVerticalTabsShowDetailsOnHover => {
