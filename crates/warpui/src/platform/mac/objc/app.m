@@ -472,6 +472,21 @@ static BOOL isSystemInitiatedTermination(void) {
         visible ? NSApplicationActivationPolicyRegular : NSApplicationActivationPolicyAccessory;
     return [NSApp setActivationPolicy:policy];
 }
+// Without this, macOS drops notifications while Warp is the frontmost app, which hides the ones
+// sent for agents running in background tabs of the active window.
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center
+       willPresentNotification:(UNNotification *)notification
+         withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completionHandler {
+    if (@available(macOS 11.0, *)) {
+        completionHandler(UNNotificationPresentationOptionBanner |
+                          UNNotificationPresentationOptionList |
+                          UNNotificationPresentationOptionSound);
+    } else {
+        completionHandler(UNNotificationPresentationOptionAlert |
+                          UNNotificationPresentationOptionSound);
+    }
+}
+
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center
     didReceiveNotificationResponse:(UNNotificationResponse *)response
              withCompletionHandler:(void (^)(void))completionHandler {

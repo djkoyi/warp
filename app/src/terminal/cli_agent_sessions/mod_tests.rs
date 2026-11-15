@@ -1481,3 +1481,91 @@ fn resume_cwd_stays_pinned_to_launch_directory() {
     assert_eq!(session.session_context.cwd.as_deref(), Some("/elsewhere"));
     assert_eq!(session.session_context.resume_cwd.as_deref(), Some("/repo"));
 }
+
+// --- Meters bridge ---
+
+fn status_line_event(used_pct: f64) -> CLIAgentEvent {
+    let body = format!(
+        r#"{{"v":1,"agent":"claude","event":"status_line","meters":{{"context_window":{{"used_percentage":{used_pct},"context_window_size":200000}}}}}}"#
+    );
+    parse_event(Some("warp://cli-agent"), &body).expect("status_line parses")
+}
+
+#[test]
+fn status_line_updates_meters_without_enabling_rich_status() {
+    App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let view_id = EntityId::new();
+        model.update(&mut app, |m, ctx| {
+            m.set_session(
+                view_id,
+                cli_agent_session(CLIAgentSessionStatus::InProgress, false),
+                ctx,
+            );
+            m.update_from_event(view_id, &status_line_event(42.), ctx);
+        });
+
+        model.read(&app, |m, _| {
+            let used = m
+                .meters(view_id)
+                .and_then(|meters| meters.snapshot.as_ref())
+                .and_then(|snapshot| snapshot.context_used_pct);
+            assert_eq!(used, Some(42.));
+            assert!(
+                !m.session(view_id).unwrap().supports_rich_status(),
+                "a status line alone carries no lifecycle events"
+            );
+            assert_eq!(
+                m.session(view_id).map(|s| &s.status),
+                Some(&CLIAgentSessionStatus::InProgress)
+            );
+        });
+    });
+}
+
+#[test]
+fn meters_are_dropped_when_the_session_is_removed() {
+    App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let view_id = EntityId::new();
+        model.update(&mut app, |m, ctx| {
+            m.set_session(
+                view_id,
+                cli_agent_session(CLIAgentSessionStatus::InProgress, true),
+                ctx,
+            );
+            m.update_from_event(view_id, &status_line_event(10.), ctx);
+            m.remove_session(view_id, ctx);
+        });
+
+        assert!(model.read(&app, |m, _| m.meters(view_id).is_none()));
+    });
+}
+
+#[test]
+fn status_line_does_not_disarm_pending_ctrl_c_cancel() {
+    App::test((), |mut app| async move {
+        let model = app.add_singleton_model(|_| CLIAgentSessionsModel::new());
+        let view_id = EntityId::new();
+        model.update(&mut app, |m, ctx| {
+            m.set_session(
+                view_id,
+                cli_agent_session(CLIAgentSessionStatus::InProgress, true),
+                ctx,
+            );
+            m.update_from_event(view_id, &rich_event(CLIAgentEventType::PromptSubmit), ctx);
+            m.observe_ctrl_c_write_with_window(view_id, TEST_WINDOW, ctx);
+            m.update_from_event(view_id, &status_line_event(55.), ctx);
+        });
+
+        Timer::after(TEST_WINDOW + TEST_WINDOW_BUFFER).await;
+
+        model.read(&app, |m, _| {
+            assert_eq!(
+                m.session(view_id).map(|s| &s.status),
+                Some(&CLIAgentSessionStatus::Cancelled),
+                "Claude Code re-runs its status line after an interrupt; that must not count as activity"
+            );
+        });
+    });
+}

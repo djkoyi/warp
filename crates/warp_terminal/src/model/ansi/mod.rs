@@ -1049,7 +1049,9 @@ where
                         })
                         .unwrap_or_default();
                     if !body.is_empty() {
-                        log::info!(
+                        // Debug level: CLI agent meter bridges send one of these on every
+                        // status line refresh, and bodies can contain paths and prompts.
+                        log::debug!(
                             "Received OSC 777 notification: title={:?}, body={}",
                             title,
                             body

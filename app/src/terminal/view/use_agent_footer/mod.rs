@@ -11,7 +11,9 @@ use crate::ai::agent::ImageContext;
 use crate::ai::blocklist::agent_view::agent_input_footer::{
     AgentInputFooter, AgentInputFooterEvent,
 };
-use crate::terminal::cli_agent_sessions::{CLIAgentInputEntrypoint, CLIAgentSessionsModel};
+use crate::terminal::cli_agent_sessions::{
+    CLIAgentInputEntrypoint, CLIAgentSessionsModel, meters_ui,
+};
 use crate::terminal::shared_session::{
     SharedSessionActionSource, SharedSessionScrollbackType, SharedSessionSource,
 };
@@ -173,6 +175,10 @@ impl TerminalView {
             }
             AISettingsChangedEvent::CLIAgentToolbarEnabledCommands { .. } => {
                 me.maybe_show_use_agent_footer_in_blocklist(ctx);
+            }
+            AISettingsChangedEvent::ShowCLIAgentMeters { .. }
+            | AISettingsChangedEvent::CLIAgentCompactionWarningThreshold { .. } => {
+                me.use_agent_footer.update(ctx, |_, ctx| ctx.notify());
             }
             _ => (),
         });
@@ -1328,6 +1334,21 @@ impl UseAgentToolbar {
             .map(|session| session.agent)
     }
 
+    fn render_meters_strip(&self, app: &AppContext) -> Option<Box<dyn Element>> {
+        if !meters_ui::meters_enabled(app) {
+            return None;
+        }
+        let sessions = CLIAgentSessionsModel::as_ref(app);
+        let session = sessions.session(self.terminal_view_id)?;
+        let meters = sessions.meters(self.terminal_view_id)?;
+        meters_ui::render_meters_strip(
+            session,
+            meters,
+            meters_ui::compaction_warning_threshold(app),
+            Appearance::as_ref(app),
+        )
+    }
+
     /// Activates the warpify footer. When active, the footer shows the
     /// warpify view instead of the CLI agent or regular "Use agent" views.
     pub(in crate::terminal) fn show_warpify(&mut self, ctx: &mut ViewContext<Self>) {
@@ -1416,8 +1437,17 @@ impl View for UseAgentToolbar {
             if !cli_agent.supports_cli_agent_footer() {
                 return Empty::new().finish();
             }
-            let mut container = Container::new(ChildView::new(&self.agent_input_footer).finish())
-                .with_horizontal_padding(*super::PADDING_LEFT);
+            let footer = ChildView::new(&self.agent_input_footer).finish();
+            let content = match self.render_meters_strip(app) {
+                Some(meters_strip) => Flex::column()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                    .with_child(Container::new(meters_strip).with_padding_top(4.).finish())
+                    .with_child(footer)
+                    .finish(),
+                None => footer,
+            };
+            let mut container =
+                Container::new(content).with_horizontal_padding(*super::PADDING_LEFT);
 
             // Apply the alt screen background on this outer container so it covers
             // the horizontal padding area as well, preventing a visible color mismatch

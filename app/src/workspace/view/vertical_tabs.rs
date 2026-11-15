@@ -59,7 +59,7 @@ use crate::tab::{
     SelectedTabColor, TAB_INDICATOR_SYNCED_COLOR, TabData, reveals_tab_shortcut_hints,
     tab_activate_binding_name, tab_position_id,
 };
-use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::cli_agent_sessions::{CLIAgentSessionsModel, meters_ui};
 use crate::terminal::session_settings::SessionSettings;
 use crate::terminal::view::TerminalViewState;
 use crate::terminal::{CLIAgent, TerminalView};
@@ -5557,6 +5557,11 @@ fn render_terminal_right_badges(
         .with_spacing(4.);
     let mut has_badges = false;
 
+    if let Some(segments) = cli_agent_meter_segments(terminal_view.id(), app) {
+        right_badges.add_child(render_passive_meters_badge(&segments, appearance));
+        has_badges = true;
+    }
+
     if show_diff_stats && let Some(git_line_changes) = terminal_view.current_diff_line_changes(app)
     {
         right_badges.add_child(render_terminal_diff_stats_badge(
@@ -5648,6 +5653,36 @@ fn render_terminal_pull_request_badge(
     })
     .with_cursor(Cursor::PointingHand)
     .finish()
+}
+
+/// Context usage and activity of the CLI agent in this terminal, if meters are enabled and there is
+/// anything to show.
+fn cli_agent_meter_segments(
+    terminal_view_id: EntityId,
+    app: &AppContext,
+) -> Option<Vec<meters_ui::MeterSegment>> {
+    if !meters_ui::meters_enabled(app) {
+        return None;
+    }
+    let sessions = CLIAgentSessionsModel::as_ref(app);
+    let session = sessions.session(terminal_view_id)?;
+    let meters = sessions.meters(terminal_view_id);
+    let segments = meters_ui::tab_segments(
+        meters_ui::session_activity(session, meters),
+        meters,
+        meters_ui::compaction_warning_threshold(app),
+    );
+    (!segments.is_empty()).then_some(segments)
+}
+
+fn render_passive_meters_badge(
+    segments: &[meters_ui::MeterSegment],
+    appearance: &Appearance,
+) -> Box<dyn Element> {
+    render_badge_container(
+        meters_ui::render_inline_segments(segments, 10., appearance),
+        internal_colors::fg_overlay_1(appearance.theme()),
+    )
 }
 
 fn render_passive_terminal_pull_request_badge(

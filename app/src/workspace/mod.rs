@@ -4,8 +4,8 @@ pub(crate) mod auto_handoff;
 pub mod bonus_grant_notification_model;
 #[cfg(feature = "local_fs")]
 pub(crate) mod claude_worktrees;
-#[cfg(target_os = "macos")]
 pub(crate) mod claude_tabs;
+#[cfg(target_os = "macos")]
 pub(crate) mod cli_install;
 mod close_session_confirmation_dialog;
 pub(crate) mod cross_window_tab_drag;
@@ -98,6 +98,7 @@ pub fn init(app: &mut AppContext) {
     view::feature_intro_modal::init(app);
     view::auto_handoff_sleep_modal::init(app);
     view::chatgpt_plan_modal::init(app);
+    view::cli_agent_overview_modal::init(app);
     view::cloud_agent_capacity_modal::init(app);
     view::codex_modal::init(app);
     view::free_ai_removal_modal::init(app);
@@ -1570,6 +1571,27 @@ pub fn init(app: &mut AppContext) {
     .with_mac_key_binding("cmd-shift-M")
     .with_linux_or_windows_key_binding("ctrl-shift-M")
     .with_group(bindings::BindingGroup::WarpAi.as_str())]);
+
+    // Third-party coding agents work regardless of the Warp AI toggle, so these are not gated on
+    // `IS_ANY_AI_ENABLED`.
+    app.register_editable_bindings([
+        EditableBinding::new(
+            "workspace:toggle_cli_agent_overview",
+            "Show coding agent sessions overview (context, cost, status)",
+            WorkspaceAction::ToggleCLIAgentOverview,
+        )
+        .with_enabled(|| FeatureFlag::CLIAgentMeters.is_enabled())
+        .with_context_predicate(id!("Workspace")),
+        EditableBinding::new(
+            "workspace:install_claude_meters_bridge",
+            "Install Claude Code meters bridge (status line and hooks)",
+            WorkspaceAction::InstallClaudeMetersBridge,
+        )
+        .with_enabled(|| {
+            cfg!(not(target_family = "wasm")) && FeatureFlag::CLIAgentMeters.is_enabled()
+        })
+        .with_context_predicate(id!("Workspace")),
+    ]);
 }
 
 fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {

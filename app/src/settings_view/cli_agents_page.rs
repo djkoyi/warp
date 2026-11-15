@@ -42,16 +42,22 @@ use crate::appearance::Appearance;
 use crate::menu::{MenuItem, MenuItemFields};
 use crate::settings::{
     AISettings, AISettingsChangedEvent, AutoDismissRichInputAfterSubmit,
-    AutoOpenRichInputOnCLIAgentStart, AutoToggleRichInput, ShouldRenderCLIAgentToolbar,
-    SubmitRichInputOnCtrlEnter,
+    AutoOpenRichInputOnCLIAgentStart, AutoToggleRichInput, NotifyCLIAgentBackgroundTabs,
+    ShouldRenderCLIAgentToolbar, ShowCLIAgentMeters, SubmitRichInputOnCtrlEnter,
 };
 use crate::terminal::CLIAgent;
+#[cfg(not(target_family = "wasm"))]
+use crate::terminal::cli_agent_sessions::meters_bridge;
 use crate::util::bindings;
+use crate::view_components::action_button::{ActionButton, SecondaryTheme};
 use crate::view_components::dropdown::DropdownAction;
 use crate::view_components::{Dropdown, SubmittableTextInput, SubmittableTextInputEvent};
 use crate::{TelemetryEvent, send_telemetry_from_ctx};
 
 const PAGE_TITLE: &str = "Third party CLI agents";
+
+/// Choices offered for the compaction warning threshold.
+const COMPACTION_WARNING_THRESHOLDS: &[u8] = &[50, 60, 70, 75, 80, 85, 90, 95];
 
 pub struct CLIAgentsPageView {
     page: PageType<Self>,
@@ -60,6 +66,12 @@ pub struct CLIAgentsPageView {
     cli_agent_footer_command_mouse_state_handles: Vec<MouseStateHandle>,
     cli_agent_footer_command_agent_dropdowns: Vec<ViewHandle<Dropdown<CLIAgentsPageAction>>>,
     cli_agent_toolbar_inline_editor: ViewHandle<AgentToolbarInlineEditor>,
+    compaction_threshold_dropdown: ViewHandle<Dropdown<CLIAgentsPageAction>>,
+    install_meters_bridge_button: ViewHandle<ActionButton>,
+    /// Outcome of the last meters bridge install from this page.
+    meters_bridge_status: Option<String>,
+    /// Mirrors the bridge's on-disk backup marker; read once and updated on toggle.
+    transcript_backup_enabled: bool,
 }
 
 impl CLIAgentsPageView {
@@ -114,6 +126,17 @@ impl CLIAgentsPageView {
             ctx.notify();
         });
 
+        let install_meters_bridge_button = ctx.add_typed_action_view(|_| {
+            ActionButton::new("Install meters bridge", SecondaryTheme).on_click(|ctx| {
+                ctx.dispatch_typed_action(CLIAgentsPageAction::InstallMetersBridge);
+            })
+        });
+
+        #[cfg(not(target_family = "wasm"))]
+        let transcript_backup_enabled = meters_bridge::is_transcript_backup_enabled();
+        #[cfg(target_family = "wasm")]
+        let transcript_backup_enabled = false;
+
         Self {
             page: Self::build_page(),
             local_only_icon_tooltip_states: Default::default(),
@@ -121,7 +144,58 @@ impl CLIAgentsPageView {
             cli_agent_footer_command_mouse_state_handles,
             cli_agent_footer_command_agent_dropdowns: Self::create_cli_agent_dropdowns(ctx),
             cli_agent_toolbar_inline_editor,
+            compaction_threshold_dropdown: Self::create_compaction_threshold_dropdown(ctx),
+            install_meters_bridge_button,
+            meters_bridge_status: None,
+            transcript_backup_enabled,
         }
+    }
+
+    fn create_compaction_threshold_dropdown(
+        ctx: &mut ViewContext<Self>,
+    ) -> ViewHandle<Dropdown<CLIAgentsPageAction>> {
+        let current = *AISettings::as_ref(ctx).cli_agent_compaction_warning_threshold;
+        ctx.add_typed_action_view(move |ctx| {
+            let mut dropdown = Dropdown::new(ctx);
+            dropdown.set_top_bar_max_width(100.);
+            dropdown.set_menu_width(100., ctx);
+            dropdown.set_main_axis_size(MainAxisSize::Min, ctx);
+            let items: Vec<_> = COMPACTION_WARNING_THRESHOLDS
+                .iter()
+                .map(|threshold| {
+                    MenuItemFields::new(format!("{threshold}%"))
+                        .with_on_select_action(DropdownAction::select_action_and_close(
+                            CLIAgentsPageAction::SetCompactionWarningThreshold(*threshold),
+                        ))
+                        .into_item()
+                })
+                .collect();
+            dropdown.set_rich_items(items, ctx);
+            dropdown.set_selected_by_name(format!("{current}%"), ctx);
+            dropdown
+        })
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn install_meters_bridge(&mut self) {
+        self.meters_bridge_status = Some(match meters_bridge::install() {
+            Ok(report) => {
+                let mut message = format!(
+                    "Installed {} and registered it in {}.",
+                    report.script_path.display(),
+                    report.settings_path.display()
+                );
+                if let Some(previous) = &report.chained_status_line {
+                    message.push_str(&format!(" Your status line ({previous}) still runs."));
+                }
+                if let Some(backup) = &report.settings_backup_path {
+                    message.push_str(&format!(" Backup: {}.", backup.display()));
+                }
+                message.push_str(" Restart Claude Code sessions to load it.");
+                message
+            }
+            Err(err) => format!("Could not install the meters bridge: {err:#}"),
+        });
     }
 
     fn build_page() -> PageType<Self> {
@@ -133,6 +207,7 @@ impl CLIAgentsPageView {
             Box::new(CLIAgentSubmitRichInputWidget::default()),
             Box::new(CLIAgentCommandsWidget),
             Box::new(CLIAgentToolbarLayoutWidget),
+            Box::new(CLIAgentMetersWidget::default()),
         ];
         PageType::new_uncategorized(widgets, Some(PageTitle::new(PAGE_TITLE)))
     }
@@ -243,6 +318,11 @@ pub enum CLIAgentsPageAction {
         pattern: String,
         agent: Option<CLIAgent>,
     },
+    ToggleShowCLIAgentMeters,
+    ToggleNotifyCLIAgentBackgroundTabs,
+    SetCompactionWarningThreshold(u8),
+    ToggleTranscriptBackup,
+    InstallMetersBridge,
 }
 
 impl TypedActionView for CLIAgentsPageView {
@@ -311,6 +391,52 @@ impl TypedActionView for CLIAgentsPageView {
                 AISettings::handle(ctx).update(ctx, |settings, ctx| {
                     settings.set_cli_agent_for_command(pattern, *agent, ctx);
                 });
+            }
+            CLIAgentsPageAction::ToggleShowCLIAgentMeters => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(settings.show_cli_agent_meters.toggle_and_save_value(ctx));
+                });
+                ctx.notify();
+            }
+            CLIAgentsPageAction::ToggleNotifyCLIAgentBackgroundTabs => {
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(
+                        settings
+                            .notify_cli_agent_background_tabs
+                            .toggle_and_save_value(ctx)
+                    );
+                });
+                ctx.notify();
+            }
+            CLIAgentsPageAction::SetCompactionWarningThreshold(threshold) => {
+                let threshold = (*threshold).clamp(1, 100);
+                AISettings::handle(ctx).update(ctx, |settings, ctx| {
+                    report_if_error!(
+                        settings
+                            .cli_agent_compaction_warning_threshold
+                            .set_value(threshold, ctx)
+                    );
+                });
+                ctx.notify();
+            }
+            CLIAgentsPageAction::ToggleTranscriptBackup => {
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    let enabled = !self.transcript_backup_enabled;
+                    match meters_bridge::set_transcript_backup_enabled(enabled) {
+                        Ok(()) => self.transcript_backup_enabled = enabled,
+                        Err(err) => {
+                            self.meters_bridge_status =
+                                Some(format!("Could not change transcript backups: {err}"));
+                        }
+                    }
+                }
+                ctx.notify();
+            }
+            CLIAgentsPageAction::InstallMetersBridge => {
+                #[cfg(not(target_family = "wasm"))]
+                self.install_meters_bridge();
+                ctx.notify();
             }
         }
     }
@@ -395,6 +521,27 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
             )
             .with_group(bindings::BindingGroup::WarpAi)
             .with_enabled(|| FeatureFlag::CLIAgentRichInput.is_enabled()),
+        ],
+        app,
+    );
+    ToggleSettingActionPair::add_toggle_setting_action_pairs_as_bindings(
+        vec![
+            ToggleSettingActionPair::new(
+                "coding agent usage meters",
+                builder(SettingsAction::CLIAgents(
+                    CLIAgentsPageAction::ToggleShowCLIAgentMeters,
+                )),
+                context,
+                flags::CLI_AGENT_METERS_ENABLED,
+            ),
+            ToggleSettingActionPair::new(
+                "coding agent notifications for unfocused tabs",
+                builder(SettingsAction::CLIAgents(
+                    CLIAgentsPageAction::ToggleNotifyCLIAgentBackgroundTabs,
+                )),
+                context,
+                flags::CLI_AGENT_BACKGROUND_TAB_NOTIFICATIONS_ENABLED,
+            ),
         ],
         app,
     );
@@ -813,5 +960,166 @@ impl SettingsWidget for CLIAgentToolbarLayoutWidget {
         }
 
         render_toolbar_layout_editor(&view.cli_agent_toolbar_inline_editor, appearance)
+    }
+}
+
+#[derive(Default)]
+struct CLIAgentMetersWidget {
+    meters_toggle: SwitchStateHandle,
+    background_notifications_toggle: SwitchStateHandle,
+    transcript_backup_toggle: SwitchStateHandle,
+}
+
+impl CLIAgentMetersWidget {
+    fn render_description(
+        text: &str,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        appearance
+            .ui_builder()
+            .paragraph(text.to_owned())
+            .with_style(UiComponentStyles {
+                font_size: Some(appearance.ui_font_size()),
+                font_color: Some(styles::description_font_color(true, app).into()),
+                margin: Some(
+                    Coords::default()
+                        .top(styles::DESCRIPTION_NEGATIVE_MARGIN_OFFSET)
+                        .bottom(styles::DESCRIPTION_MARGIN_BOTTOM)
+                        .right(styles::TOGGLE_WIDTH_MARGIN),
+                ),
+                ..Default::default()
+            })
+            .build()
+            .finish()
+    }
+}
+
+impl SettingsWidget for CLIAgentMetersWidget {
+    type View = CLIAgentsPageView;
+
+    fn search_terms(&self) -> &str {
+        "third party cli coding agent claude meters usage context window tokens cost plan limits \
+         rate limit compaction compact warning threshold status notifications background tabs \
+         transcript backup status line statusline hooks bridge"
+    }
+
+    fn should_render(&self, _app: &AppContext) -> bool {
+        FeatureFlag::CLIAgentMeters.is_enabled()
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        if !self.should_render(app) {
+            return Empty::new().finish();
+        }
+        let ai_settings = AISettings::as_ref(app);
+        let mut column = Flex::column();
+
+        column.add_child(render_ai_setting_toggle::<ShowCLIAgentMeters>(
+            "Show coding agent usage meters",
+            CLIAgentsPageAction::ToggleShowCLIAgentMeters,
+            *ai_settings.show_cli_agent_meters,
+            true,
+            self.meters_toggle.clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        ));
+        column.add_child(Self::render_description(
+            "Shows context window usage, tokens, cost, lines changed, plan limits and status for \
+             Claude Code in the coding agent toolbar and in tabs. Requires the meters bridge below.",
+            appearance,
+            app,
+        ));
+
+        let threshold_label = appearance
+            .ui_builder()
+            .span("Warn about compaction at context usage".to_owned())
+            .with_style(UiComponentStyles {
+                font_size: Some(CONTENT_FONT_SIZE),
+                ..Default::default()
+            })
+            .build()
+            .finish();
+        column.add_child(
+            Container::new(
+                Flex::row()
+                    .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+                    .with_children([
+                        Shrinkable::new(1., threshold_label).finish(),
+                        ChildView::new(&view.compaction_threshold_dropdown).finish(),
+                    ])
+                    .finish(),
+            )
+            .with_margin_bottom(styles::DESCRIPTION_MARGIN_BOTTOM)
+            .finish(),
+        );
+
+        column.add_child(render_ai_setting_toggle::<NotifyCLIAgentBackgroundTabs>(
+            "Notify when an agent in an unfocused tab needs attention",
+            CLIAgentsPageAction::ToggleNotifyCLIAgentBackgroundTabs,
+            *ai_settings.notify_cli_agent_background_tabs,
+            true,
+            self.background_notifications_toggle.clone(),
+            &view.local_only_icon_tooltip_states,
+            app,
+        ));
+        column.add_child(Self::render_description(
+            "Sends a desktop notification when a coding agent finishes or waits for permission or \
+             input while another tab or pane has focus. Desktop notifications must be enabled.",
+            appearance,
+            app,
+        ));
+
+        let backup_label = render_body_item_label::<CLIAgentsPageAction>(
+            "Back up the transcript before each compaction".into(),
+            Some(styles::header_font_color(true, app)),
+            None,
+            LocalOnlyIconState::Hidden,
+            ToggleState::Enabled,
+            appearance,
+        );
+        column.add_child(build_toggle_element(
+            backup_label,
+            render_ai_feature_switch(
+                self.transcript_backup_toggle.clone(),
+                view.transcript_backup_enabled,
+                cfg!(not(target_family = "wasm")),
+                CLIAgentsPageAction::ToggleTranscriptBackup,
+                app,
+            ),
+            appearance,
+            None,
+        ));
+        column.add_child(Self::render_description(
+            "The meters bridge copies the session transcript to ~/.claude/warp/transcript-backups \
+             before Claude Code compacts it.",
+            appearance,
+            app,
+        ));
+
+        column.add_child(
+            Container::new(
+                Flex::row()
+                    .with_child(ChildView::new(&view.install_meters_bridge_button).finish())
+                    .finish(),
+            )
+            .with_margin_bottom(4.)
+            .finish(),
+        );
+        let bridge_text = view.meters_bridge_status.as_deref().unwrap_or(
+            "Copies the bridge script to ~/.claude/warp and registers it as the Claude Code \
+             statusLine command and as hooks in ~/.claude/settings.json (a backup is kept; an \
+             existing status line keeps running).",
+        );
+        column.add_child(Self::render_description(bridge_text, appearance, app));
+
+        column.finish()
     }
 }

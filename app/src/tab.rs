@@ -39,6 +39,8 @@ use crate::launch_configs::launch_config::LaunchConfig;
 use crate::menu::{MenuAction, MenuItem, MenuItemFields};
 use crate::pane_group::{PaneGroup, PaneId};
 use crate::shell_indicator::ShellIndicatorType;
+use crate::terminal::cli_agent_sessions::CLIAgentSessionsModel;
+use crate::terminal::cli_agent_sessions::meters_ui::{self, MeterSegment};
 use crate::terminal::shared_session::SharedSessionStatus;
 use crate::terminal::shared_session::manager::Manager;
 use crate::terminal::shared_session::render_util::shared_session_indicator_color;
@@ -1098,6 +1100,8 @@ pub struct TabComponent<'a> {
     /// (multi-tab menu vs single-tab menu).
     is_in_multi_tab_selection: bool,
     shortcut_hint_label: Option<String>,
+    /// CLI agent context usage and activity for the focused session, shown after the title.
+    meter_segments: Vec<MeterSegment>,
 }
 
 /// Structure that holds TabComponent styles.
@@ -1244,6 +1248,7 @@ impl<'a> TabComponent<'a> {
             pane_group_id,
             pane_id,
         };
+        let meter_segments = Self::meter_segments(tab, ctx);
         Self {
             tab: tab.clone(),
             tab_bar,
@@ -1267,7 +1272,28 @@ impl<'a> TabComponent<'a> {
             locator,
             is_in_multi_tab_selection: false,
             shortcut_hint_label,
+            meter_segments,
         }
+    }
+
+    fn meter_segments(tab: &TabData, app: &AppContext) -> Vec<MeterSegment> {
+        if !meters_ui::meters_enabled(app) {
+            return Vec::new();
+        }
+        let Some(terminal_view) = tab.pane_group.as_ref(app).focused_session_view(app) else {
+            return Vec::new();
+        };
+        let sessions = CLIAgentSessionsModel::as_ref(app);
+        let terminal_view_id = terminal_view.id();
+        let Some(session) = sessions.session(terminal_view_id) else {
+            return Vec::new();
+        };
+        let meters = sessions.meters(terminal_view_id);
+        meters_ui::tab_segments(
+            meters_ui::session_activity(session, meters),
+            meters,
+            meters_ui::compaction_warning_threshold(app),
+        )
     }
 
     /// Marks this tab as being rendered inside the floating chip used by the
@@ -1502,13 +1528,14 @@ impl<'a> TabComponent<'a> {
             )
             .finish()
         } else {
-            Text::new_inline(
+            let font_size = self.styles.default.font_size.expect("Font size defined");
+            let title = Text::new_inline(
                 self.title.clone(),
                 self.styles
                     .default
                     .font_family_id
                     .expect("Font family defined"),
-                self.styles.default.font_size.expect("Font size defined"),
+                font_size,
             )
             .with_clip(if self.should_clip_text_start() {
                 ClipConfig::start()
@@ -1517,7 +1544,24 @@ impl<'a> TabComponent<'a> {
             })
             .with_style(font_style)
             .with_color(font_color)
-            .finish()
+            .finish();
+            if self.meter_segments.is_empty() {
+                return title;
+            }
+            // The title shrinks (and clips) first so the meters stay readable in narrow tabs.
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_child(Shrinkable::new(1., title).finish())
+                .with_child(
+                    Container::new(meters_ui::render_inline_segments(
+                        &self.meter_segments,
+                        (font_size - 2.).max(9.),
+                        self.appearance,
+                    ))
+                    .with_padding_left(6.)
+                    .finish(),
+                )
+                .finish()
         }
     }
 

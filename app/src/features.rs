@@ -399,6 +399,8 @@ fn enabled_features() -> HashSet<FeatureFlag> {
         FeatureFlag::SummarizationViaMessageReplacement,
         #[cfg(feature = "pluggable_notifications")]
         FeatureFlag::PluggableNotifications,
+        #[cfg(feature = "cli_agent_meters")]
+        FeatureFlag::CLIAgentMeters,
         #[cfg(feature = "async_find")]
         FeatureFlag::AsyncFind,
         #[cfg(feature = "list_skills")]

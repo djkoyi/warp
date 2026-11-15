@@ -1,5 +1,9 @@
 pub mod event;
 pub mod listener;
+pub mod meters;
+#[cfg(not(target_family = "wasm"))]
+pub mod meters_bridge;
+pub mod meters_ui;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod plugin_manager;
 
@@ -12,6 +16,7 @@ use warpui::r#async::SpawnedFutureHandle;
 use warpui::{Entity, EntityId, ModelContext, ModelHandle, SingletonEntity};
 
 use self::listener::CLIAgentSessionListener;
+use self::meters::CLIAgentMeters;
 use super::CLIAgent;
 use crate::ai::blocklist::InputConfig;
 
@@ -312,7 +317,10 @@ impl CLIAgentSession {
                 self.plugin_version = event.payload.plugin_version.clone();
                 return None;
             }
-            CLIAgentEventType::Unknown(_) => return None,
+            CLIAgentEventType::StatusLine
+            | CLIAgentEventType::PreCompact
+            | CLIAgentEventType::PostCompact
+            | CLIAgentEventType::Unknown(_) => return None,
         };
 
         self.status = new_status.clone();
@@ -354,6 +362,8 @@ pub enum CLIAgentSessionsModelEvent {
         terminal_view_id: EntityId,
         agent: CLIAgent,
     },
+    /// The session's [`CLIAgentMeters`] changed.
+    MetersUpdated { terminal_view_id: EntityId },
 }
 
 impl CLIAgentSessionsModelEvent {
@@ -373,7 +383,8 @@ impl CLIAgentSessionsModelEvent {
             }
             | CLIAgentSessionsModelEvent::SessionUpdated {
                 terminal_view_id, ..
-            } => *terminal_view_id,
+            }
+            | CLIAgentSessionsModelEvent::MetersUpdated { terminal_view_id } => *terminal_view_id,
         }
     }
 }
@@ -402,6 +413,9 @@ struct CtrlCCancelState {
 /// Singleton model that tracks pane-scoped CLI agent state and plugin-enriched session context.
 pub struct CLIAgentSessionsModel {
     sessions: HashMap<EntityId, CLIAgentSession>,
+    /// Usage meters per terminal view. Kept outside [`CLIAgentSession`] because they are fed by
+    /// the optional meters bridge rather than by the session lifecycle.
+    meters: HashMap<EntityId, CLIAgentMeters>,
     /// Tracks (agent, remote_host) pairs where an auto plugin operation (install or update) has failed.
     /// Shared across all views so failure in one tab is reflected everywhere.
     plugin_auto_failures: HashSet<(CLIAgent, Option<String>)>,
@@ -422,6 +436,7 @@ impl CLIAgentSessionsModel {
     pub fn new() -> Self {
         Self {
             sessions: HashMap::new(),
+            meters: HashMap::new(),
             plugin_auto_failures: HashSet::new(),
             ctrl_c_cancel_state: HashMap::new(),
             next_ctrl_c_token: 0,
@@ -430,6 +445,10 @@ impl CLIAgentSessionsModel {
 
     pub fn session(&self, terminal_view_id: EntityId) -> Option<&CLIAgentSession> {
         self.sessions.get(&terminal_view_id)
+    }
+
+    pub fn meters(&self, terminal_view_id: EntityId) -> Option<&CLIAgentMeters> {
+        self.meters.get(&terminal_view_id)
     }
 
     /// Returns `true` if the rich input editor is currently open for this terminal.
@@ -512,6 +531,7 @@ impl CLIAgentSessionsModel {
     pub fn remove_session(&mut self, terminal_view_id: EntityId, ctx: &mut ModelContext<Self>) {
         self.abort_pending_cancel(terminal_view_id);
         self.ctrl_c_cancel_state.remove(&terminal_view_id);
+        self.meters.remove(&terminal_view_id);
         if let Some(session) = self.sessions.remove(&terminal_view_id) {
             ctx.emit(CLIAgentSessionsModelEvent::Ended {
                 terminal_view_id,
@@ -544,8 +564,22 @@ impl CLIAgentSessionsModel {
         // the grace window, leaving the session stuck exactly like the bug
         // this feature exists to fix. `apply_event` still treats `IdlePrompt`
         // as a no-op for status, independent of this.
-        if !matches!(event.event, CLIAgentEventType::IdlePrompt) {
+        // `StatusLine` is excluded for the same reason: Claude Code re-runs its status line on
+        // any render-relevant change, including right after an interrupt.
+        if !matches!(
+            event.event,
+            CLIAgentEventType::IdlePrompt | CLIAgentEventType::StatusLine
+        ) {
             self.abort_pending_cancel(terminal_view_id);
+        }
+
+        let meters_changed = self
+            .meters
+            .entry(terminal_view_id)
+            .or_default()
+            .apply_event(event);
+        if meters_changed {
+            ctx.emit(CLIAgentSessionsModelEvent::MetersUpdated { terminal_view_id });
         }
         if matches!(event.event, CLIAgentEventType::PromptSubmit) {
             self.ctrl_c_cancel_state
@@ -559,7 +593,11 @@ impl CLIAgentSessionsModel {
             .get_mut(&terminal_view_id)
             .expect("session presence checked above");
 
-        if event.source == CLIAgentEventSource::RichPlugin {
+        // A status-line-only setup (no lifecycle hooks) never reports turn boundaries, so it must
+        // not enable the rich status surfaces.
+        if event.source == CLIAgentEventSource::RichPlugin
+            && event.event != CLIAgentEventType::StatusLine
+        {
             session.received_rich_notification = true;
         }
 
@@ -811,6 +849,7 @@ impl CLIAgentSessionsModel {
         // arm, and any pending window belonged to the session being replaced.
         self.abort_pending_cancel(terminal_view_id);
         self.ctrl_c_cancel_state.remove(&terminal_view_id);
+        self.meters.remove(&terminal_view_id);
         if let Some(old) = self.sessions.insert(terminal_view_id, session) {
             ctx.emit(CLIAgentSessionsModelEvent::Ended {
                 terminal_view_id,
