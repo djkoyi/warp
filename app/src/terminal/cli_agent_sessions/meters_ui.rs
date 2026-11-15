@@ -8,8 +8,8 @@ use warpui::{AppContext, EntityId, SingletonEntity};
 
 use super::meters::{
     CLIAgentActivity, CLIAgentMeters, CLIAgentMetersSnapshot, CompactionState, ContextLevel,
-    RateLimitWindow, context_level, format_cost, format_pct, format_reset_in, format_tokens,
-    format_window_size, now_epoch_secs,
+    GlobalMeters, RateLimitWindow, context_level, format_cost, format_pct, format_reset_in,
+    format_tokens, format_window_size, now_epoch_secs,
 };
 use super::{CLIAgentSession, CLIAgentSessionsModel};
 use crate::appearance::Appearance;
