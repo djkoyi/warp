@@ -4006,6 +4006,7 @@ impl Workspace {
             | TabSettingsChangedEvent::VerticalTabsClaudeShowRateLimits { .. }
             | TabSettingsChangedEvent::VerticalTabsClaudeShowLines { .. }
             | TabSettingsChangedEvent::VerticalTabsClaudeShowStatus { .. }
+            | TabSettingsChangedEvent::ShowAccountUsageChip { .. }
             | TabSettingsChangedEvent::HideTitleBarSearchBarInVerticalTabs { .. } => {
                 ctx.notify();
             }
