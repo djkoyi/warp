@@ -870,6 +870,7 @@ fn build_docker_sandbox_command(
     builder.env("TERM_PROGRAM", "WarpTerminal");
     builder.env("COLORTERM", "truecolor");
     builder.env_remove("DESKTOP_STARTUP_ID");
+    remove_inherited_agent_session_env(&mut builder);
     if let Some(version) = ChannelState::app_version() {
         builder.env("TERM_PROGRAM_VERSION", version);
         builder.env(WARP_CLIENT_VERSION_ENV, version);
