@@ -406,6 +406,8 @@ pub enum WorkspaceAction {
     ToggleVerticalTabsShowDiffStats,
     ToggleVerticalTabsShowDetailsOnHover,
     ToggleVerticalTabsClaudeField(ClaudeTabField),
+    /// Toggles the account usage chip (5-hour and 7-day plan limits) in the top bar.
+    ToggleShowAccountUsageChip,
     /// Closes the focused panel. This happens as an explicit action from the user.
     ClosePanel,
     CopyTextToClipboard(String),
