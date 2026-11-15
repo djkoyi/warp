@@ -23,6 +23,8 @@ pub struct SettingsUmbrella {
     pub pre_search_expanded: Option<bool>,
     pub button_state_handle: MouseStateHandle,
     pub subpage_button_states: Vec<MouseStateHandle>,
+    /// Sidebar labels that replace a subpage's `Display` text inside this umbrella.
+    subpage_labels: Vec<(SettingsSection, &'static str)>,
 }
 
 impl SettingsUmbrella {
@@ -37,7 +39,24 @@ impl SettingsUmbrella {
             subpage_button_states: (0..subpage_count)
                 .map(|_| MouseStateHandle::default())
                 .collect(),
+            subpage_labels: Vec::new(),
         }
+    }
+
+    /// Shows `label` for `section` in the sidebar instead of the section's `Display` text, which
+    /// stays the stable, slug-like name used elsewhere.
+    pub fn with_subpage_label(mut self, section: SettingsSection, label: &'static str) -> Self {
+        self.subpage_labels.retain(|(listed, _)| *listed != section);
+        self.subpage_labels.push((section, label));
+        self
+    }
+
+    fn subpage_label(&self, section: SettingsSection) -> String {
+        self.subpage_labels
+            .iter()
+            .find(|(listed, _)| *listed == section)
+            .map(|(_, label)| (*label).to_owned())
+            .unwrap_or_else(|| section.to_string())
     }
 
     pub fn toggle(&mut self) {
@@ -99,7 +118,7 @@ impl SettingsUmbrella {
         let section = self.subpages.get(index)?;
         let mouse_state = self.subpage_button_states.get(index)?.clone();
 
-        let label = section.to_string() + &match_data.to_string();
+        let label = self.subpage_label(*section) + &match_data.to_string();
 
         let hoverable = appearance
             .ui_builder()

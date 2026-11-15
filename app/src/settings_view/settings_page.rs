@@ -184,6 +184,13 @@ impl SettingsPage {
         }
     }
 
+    /// Overrides the section for a view type that backs several pages, one instance per section
+    /// (the Claude Code subpages); [`SettingsPageMeta::section`] is per type, not per instance.
+    pub fn with_section(mut self, section: SettingsSection) -> Self {
+        self.section = section;
+        self
+    }
+
     pub fn render_page_button(
         &self,
         appearance: &Appearance,
