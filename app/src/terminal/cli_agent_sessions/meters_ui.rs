@@ -22,6 +22,7 @@ const RATE_LIMIT_WARNING_PCT: f32 = 80.;
 const RATE_LIMIT_DANGER_PCT: f32 = 95.;
 
 const SEPARATOR: &str = "  ·  ";
+const RELOAD_PENDING_LABEL: &str = "pendiente de recarga";
 
 /// Semantic color of a meter segment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -138,22 +139,27 @@ pub fn tab_segments(
     segments
 }
 
-/// The [`tab_segments`] of the CLI agent session in `terminal_view_id`, empty when meters are off
-/// or the terminal has no session.
+/// The [`tab_segments`] of the CLI agent session in `terminal_view_id` (none when meters are off),
+/// plus a pending-reload marker. Empty when the terminal has no session.
 pub fn terminal_tab_segments(terminal_view_id: EntityId, app: &AppContext) -> Vec<MeterSegment> {
-    if !meters_enabled(app) {
-        return Vec::new();
-    }
     let sessions = CLIAgentSessionsModel::as_ref(app);
     let Some(session) = sessions.session(terminal_view_id) else {
         return Vec::new();
     };
-    let meters = sessions.meters(terminal_view_id);
-    tab_segments(
-        session_activity(session, meters),
-        meters,
-        compaction_warning_threshold(app),
-    )
+    let mut segments = if meters_enabled(app) {
+        let meters = sessions.meters(terminal_view_id);
+        tab_segments(
+            session_activity(session, meters),
+            meters,
+            compaction_warning_threshold(app),
+        )
+    } else {
+        Vec::new()
+    };
+    if sessions.is_reload_pending(terminal_view_id) {
+        segments.push(MeterSegment::new(RELOAD_PENDING_LABEL, MeterTone::Warning));
+    }
+    segments
 }
 
 /// Full meter segments for the coding agent toolbar.

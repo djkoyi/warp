@@ -2,6 +2,7 @@ pub(crate) mod agent_cli_launch_modal;
 pub(crate) mod auto_handoff_sleep_modal;
 mod build_plan_migration_modal;
 pub(crate) mod chatgpt_plan_modal;
+mod claude_code_reload_actions;
 #[cfg(feature = "local_fs")]
 mod claude_worktree_actions;
 pub(crate) mod cli_agent_overview_modal;
@@ -24888,6 +24889,10 @@ impl TypedActionView for Workspace {
             CleanupClaudeWorktrees => self.cleanup_claude_worktrees(ctx),
             #[cfg(not(feature = "local_fs"))]
             NewClaudeWorktreeSession | ListClaudeWorktrees | CleanupClaudeWorktrees => {}
+            ReloadClaudeInAllTabs => self.reload_claude_in_all_tabs(false, ctx),
+            ForceReloadClaudeInAllTabs => self.reload_claude_in_all_tabs(true, ctx),
+            ReloadClaudeInActiveTab => self.reload_claude_in_active_tab(false, ctx),
+            ForceReloadClaudeInActiveTab => self.reload_claude_in_active_tab(true, ctx),
             AutoupdateFailureLink => self.open_autoupdate_failure_link(ctx),
             ApplyUpdate => self.apply_update(ctx),
             LogOut => {

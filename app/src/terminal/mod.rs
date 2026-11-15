@@ -87,8 +87,9 @@ pub mod wsl;
 
 pub mod cli_agent;
 pub use cli_agent::CLIAgent;
-pub(crate) mod cli_agent_sessions;
+pub(crate) mod claude_code_reload;
 pub(crate) mod claude_code_resume;
+pub(crate) mod cli_agent_sessions;
 
 pub use block_list_settings::*;
 pub use mock_terminal_manager::MockTerminalManager;

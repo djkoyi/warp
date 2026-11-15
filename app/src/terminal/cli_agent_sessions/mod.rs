@@ -424,6 +424,8 @@ pub struct CLIAgentSessionsModel {
     /// Source of `CtrlCCancelState::armed_token` values. Monotonically increasing;
     /// never reused, so a stale callback can never alias a newer window.
     next_ctrl_c_token: u64,
+    /// Terminals whose session will reload (`/exit` + `--resume`) once it goes idle.
+    reload_pending: HashSet<EntityId>,
 }
 
 impl Entity for CLIAgentSessionsModel {
@@ -440,11 +442,49 @@ impl CLIAgentSessionsModel {
             plugin_auto_failures: HashSet::new(),
             ctrl_c_cancel_state: HashMap::new(),
             next_ctrl_c_token: 0,
+            reload_pending: HashSet::new(),
         }
     }
 
     pub fn session(&self, terminal_view_id: EntityId) -> Option<&CLIAgentSession> {
         self.sessions.get(&terminal_view_id)
+    }
+
+    /// Whether the current session in this terminal has started at least one turn. Until then
+    /// its optimistic `InProgress` status does not mean the agent is working.
+    pub fn has_seen_prompt_submit(&self, terminal_view_id: EntityId) -> bool {
+        self.ctrl_c_cancel_state
+            .get(&terminal_view_id)
+            .is_some_and(|state| state.has_seen_prompt_submit)
+    }
+
+    pub fn is_reload_pending(&self, terminal_view_id: EntityId) -> bool {
+        self.reload_pending.contains(&terminal_view_id)
+    }
+
+    /// Marks or unmarks this terminal's session as waiting to reload, emitting `SessionUpdated`
+    /// when that changes so tabs can show it.
+    pub fn set_reload_pending(
+        &mut self,
+        terminal_view_id: EntityId,
+        pending: bool,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        let Some(session) = self.sessions.get(&terminal_view_id) else {
+            self.reload_pending.remove(&terminal_view_id);
+            return;
+        };
+        let changed = if pending {
+            self.reload_pending.insert(terminal_view_id)
+        } else {
+            self.reload_pending.remove(&terminal_view_id)
+        };
+        if changed {
+            ctx.emit(CLIAgentSessionsModelEvent::SessionUpdated {
+                terminal_view_id,
+                agent: session.agent,
+            });
+        }
     }
 
     pub fn meters(&self, terminal_view_id: EntityId) -> Option<&CLIAgentMeters> {
@@ -532,6 +572,7 @@ impl CLIAgentSessionsModel {
         self.abort_pending_cancel(terminal_view_id);
         self.ctrl_c_cancel_state.remove(&terminal_view_id);
         self.meters.remove(&terminal_view_id);
+        self.reload_pending.remove(&terminal_view_id);
         if let Some(session) = self.sessions.remove(&terminal_view_id) {
             ctx.emit(CLIAgentSessionsModelEvent::Ended {
                 terminal_view_id,
@@ -850,6 +891,7 @@ impl CLIAgentSessionsModel {
         self.abort_pending_cancel(terminal_view_id);
         self.ctrl_c_cancel_state.remove(&terminal_view_id);
         self.meters.remove(&terminal_view_id);
+        self.reload_pending.remove(&terminal_view_id);
         if let Some(old) = self.sessions.insert(terminal_view_id, session) {
             ctx.emit(CLIAgentSessionsModelEvent::Ended {
                 terminal_view_id,

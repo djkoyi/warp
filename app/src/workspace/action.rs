@@ -859,6 +859,18 @@ pub enum WorkspaceAction {
     ListClaudeWorktrees,
     /// Remove the clean Claude worktrees of the active tab's repository that no tab is using.
     CleanupClaudeWorktrees,
+    /// Reload every local Claude Code session in every window (`/exit`, then `--resume` in the
+    /// same pane) so it picks up newly added MCP servers, skills and plugins. Busy sessions reload
+    /// once they go idle.
+    ReloadClaudeInAllTabs,
+    /// Like `ReloadClaudeInAllTabs`, but interrupts busy sessions instead of waiting. While any
+    /// reload is pending, only the pending sessions are reloaded.
+    ForceReloadClaudeInAllTabs,
+    /// Reload the Claude Code sessions in the active tab's panes.
+    ReloadClaudeInActiveTab,
+    /// Like `ReloadClaudeInActiveTab`, but interrupts busy sessions instead of waiting. While any
+    /// reload is pending, only the pending sessions are reloaded.
+    ForceReloadClaudeInActiveTab,
     SaveCurrentTabAsNewConfig(usize),
     SyncTrafficLights,
     /// Opens a tab config file in the editor and dismisses the associated error toast.
@@ -1269,6 +1281,11 @@ impl WorkspaceAction {
             // The worktree tab is added asynchronously; `open_claude_worktree_tab` saves state once
             // it exists.
             NewClaudeWorktreeSession | ListClaudeWorktrees | CleanupClaudeWorktrees => false,
+            // A reload keeps every pane and conversation; panes save their own resume records.
+            ReloadClaudeInAllTabs
+            | ForceReloadClaudeInAllTabs
+            | ReloadClaudeInActiveTab
+            | ForceReloadClaudeInActiveTab => false,
             #[cfg(feature = "local_fs")]
             FileRenamed { .. } => false, // File rename doesn't change workspace state
             #[cfg(feature = "local_fs")]

@@ -5,6 +5,7 @@ mod block_banner;
 pub mod block_onboarding;
 pub(crate) mod blocklist_filter;
 mod bookmarks;
+mod claude_code_reload;
 mod context_menu;
 pub mod init;
 pub mod inline_banner;
@@ -2659,6 +2660,8 @@ pub struct TerminalView {
     /// refreshed. A plugin notification alone is not trusted to name the conversation to resume,
     /// since any process in the pane can emit one.
     claude_code_resume_verified: bool,
+    /// Reload of this pane's Claude Code session that is waiting to run or to finish.
+    claude_code_reload: Option<claude_code_reload::ClaudeCodeReload>,
     /// Timer that auto-dismisses the slow-bootstrap banner after
     /// [`SLOW_BOOTSTRAP_BANNER_AUTO_DISMISS_DURATION`]. Held so it can be
     /// aborted when the banner is hidden for any other reason (manual
@@ -4443,6 +4446,7 @@ impl TerminalView {
             claude_code_resume_banner: None,
             last_saved_claude_code_resume: None,
             claude_code_resume_verified: false,
+            claude_code_reload: None,
             slow_bootstrap_banner_auto_dismiss_handle: None,
             incompatible_configuration_banner,
             is_incompatible_configuration_banner_open: false,
@@ -12804,6 +12808,7 @@ impl TerminalView {
                             self.pending_claude_code_resume = None;
                         }
                     }
+                    self.on_user_block_completed_for_claude_code_reload(ctx);
                     self.save_claude_code_resume_if_changed(ctx);
                 }
 
@@ -14423,6 +14428,20 @@ impl TerminalView {
             && matches!(event, CLIAgentSessionsModelEvent::SessionUpdated { .. })
         {
             self.save_claude_code_resume_if_changed(ctx);
+        }
+        if event.terminal_view_id() == self.view_id {
+            match event {
+                CLIAgentSessionsModelEvent::StatusChanged { .. } => {
+                    self.on_claude_code_status_changed_for_reload(ctx);
+                }
+                CLIAgentSessionsModelEvent::Ended { .. } => {
+                    self.on_claude_code_session_ended_for_reload(ctx);
+                }
+                CLIAgentSessionsModelEvent::Started { .. }
+                | CLIAgentSessionsModelEvent::InputSessionChanged { .. }
+                | CLIAgentSessionsModelEvent::SessionUpdated { .. }
+                | CLIAgentSessionsModelEvent::MetersUpdated { .. } => {}
+            }
         }
 
         let CLIAgentSessionsModelEvent::StatusChanged {

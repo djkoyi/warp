@@ -825,6 +825,39 @@ pub fn init(app: &mut AppContext) {
         .with_enabled(|| cfg!(feature = "local_fs"))
         .with_context_predicate(id!("Workspace")),
         EditableBinding::new(
+            "workspace:reload_claude_in_all_tabs",
+            BindingDescription::new("Recargar Claude en todas las pestañas"),
+            WorkspaceAction::ReloadClaudeInAllTabs,
+        )
+        .with_group(bindings::BindingGroup::Terminal.as_str())
+        .with_enabled(|| FeatureFlag::ClaudeCodeSessionResume.is_enabled())
+        .with_context_predicate(id!("Workspace"))
+        .with_mac_key_binding("ctrl-cmd-r"),
+        EditableBinding::new(
+            "workspace:force_reload_claude_in_all_tabs",
+            BindingDescription::new("Forzar recarga de Claude en todas las pestañas"),
+            WorkspaceAction::ForceReloadClaudeInAllTabs,
+        )
+        .with_group(bindings::BindingGroup::Terminal.as_str())
+        .with_enabled(|| FeatureFlag::ClaudeCodeSessionResume.is_enabled())
+        .with_context_predicate(id!("Workspace")),
+        EditableBinding::new(
+            "workspace:reload_claude_in_active_tab",
+            BindingDescription::new("Recargar Claude en esta pestaña"),
+            WorkspaceAction::ReloadClaudeInActiveTab,
+        )
+        .with_group(bindings::BindingGroup::Terminal.as_str())
+        .with_enabled(|| FeatureFlag::ClaudeCodeSessionResume.is_enabled())
+        .with_context_predicate(id!("Workspace")),
+        EditableBinding::new(
+            "workspace:force_reload_claude_in_active_tab",
+            BindingDescription::new("Forzar recarga de Claude en esta pestaña"),
+            WorkspaceAction::ForceReloadClaudeInActiveTab,
+        )
+        .with_group(bindings::BindingGroup::Terminal.as_str())
+        .with_enabled(|| FeatureFlag::ClaudeCodeSessionResume.is_enabled())
+        .with_context_predicate(id!("Workspace")),
+        EditableBinding::new(
             TOGGLE_VERTICAL_TABS_PANEL_BINDING_NAME,
             BindingDescription::new("Toggle vertical tabs panel")
                 .with_custom_description(bindings::MAC_MENUS_CONTEXT, "Toggle Vertical Tabs Panel"),
