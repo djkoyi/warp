@@ -309,11 +309,17 @@ impl AgentToolbarItemKind {
 
     /// Default right-side items for the CLI agent footer.
     pub fn cli_default_right() -> Vec<Self> {
-        vec![
+        let mut items = vec![
             Self::ContextChip(ContextChipKind::WorkingDirectory),
             Self::ContextChip(ContextChipKind::ShellGitBranch),
-            Self::Settings,
-        ]
+        ];
+        // Surfaces the branch's PR and CI status while a CLI agent such as Claude Code runs; the
+        // chip hides itself when `gh` is missing, unauthenticated, or there is no PR.
+        if FeatureFlag::GithubPrPromptChip.is_enabled() {
+            items.push(Self::ContextChip(ContextChipKind::GithubPullRequest));
+        }
+        items.push(Self::Settings);
+        items
     }
 
     /// All items available for the CLI agent footer configurator.

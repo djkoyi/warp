@@ -1974,6 +1974,17 @@ impl LocalCodeEditorView {
         }
     }
 
+    /// Whether the terminal targeted by the selection-as-context tooltip runs a CLI agent.
+    fn selection_target_has_cli_agent(&self, app: &AppContext) -> bool {
+        let Some(tooltip) = self.selection_as_context_tooltip.as_ref() else {
+            return false;
+        };
+        app.windows()
+            .active_window()
+            .and_then(|window_id| (tooltip.terminal_target_fn)(window_id, app))
+            .is_some_and(|terminal_view| terminal_view.as_ref(app).active_cli_agent(app).is_some())
+    }
+
     fn render_selection_tooltip(&self, app: &AppContext) -> Option<Box<dyn Element>> {
         // If there's a single selection and an active terminal view, we want to give the user an option to add the selection as context.
         self.selection_as_context_tooltip
@@ -2319,7 +2330,10 @@ impl View for LocalCodeEditorView {
         if self.selection_as_context_tooltip.is_some() {
             // When a single terminal exists in the window and the user has made a selection (but isn't currently selecting),
             // we render a tooltip that allows them to add the selected text to the terminal context.
-            let is_ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app);
+            // Third-party CLI agents (e.g. Claude Code) receive the selection over the PTY, so
+            // they don't depend on Warp AI being enabled.
+            let is_ai_enabled = AISettings::as_ref(app).is_any_ai_enabled(app)
+                || self.selection_target_has_cli_agent(app);
             if is_ai_enabled
                 && FeatureFlag::SelectionAsContext.is_enabled()
                 && !editor.is_selecting()

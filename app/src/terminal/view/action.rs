@@ -368,6 +368,9 @@ pub enum TerminalAction {
     ToggleCodeReviewPane {
         entrypoint: CodeReviewPaneEntrypoint,
     },
+    /// Toggles the code review pane targeting this terminal's CLI agent (e.g. Claude Code), so
+    /// line comments are sent to that agent. Works without Warp AI.
+    ReviewCliAgentChanges,
     InitProject,
     SummarizeConversation,
     IndexProjectSpeedbump,
@@ -703,6 +706,7 @@ impl fmt::Debug for TerminalAction {
             ToggleTodoPopup => write!(f, "ToggleTodoPopup"),
             CloseTodoPopup => write!(f, "CloseTodoPopup"),
             ToggleCodeReviewPane { .. } => write!(f, "ToggleCodeReviewPane"),
+            ReviewCliAgentChanges => write!(f, "ReviewCliAgentChanges"),
             InitProject => write!(f, "InitProject"),
             IndexProjectSpeedbump => write!(f, "IndexProject"),
             AddProjectAtCurrentDirectory => write!(f, "AddProjectAtCurrentDirectory"),

@@ -6838,8 +6838,14 @@ impl CodeReviewView {
 
         let has_changes = matches!(self.state(), CodeReviewViewState::Loaded(loaded) if !loaded.to_diff_stats().has_no_changes());
 
-        let is_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
-        if is_ai_enabled && FeatureFlag::DiffSetAsContext.is_enabled() && has_changes {
+        // CLI agents (e.g. Claude Code) get the diff set over the PTY, independent of Warp AI.
+        let can_attach_diff_set = AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
+            || self.attach_target_terminal(ctx).is_some_and(|terminal| {
+                terminal.read(ctx, |terminal, ctx| {
+                    terminal.active_cli_agent(ctx).is_some()
+                })
+            });
+        if can_attach_diff_set && FeatureFlag::DiffSetAsContext.is_enabled() && has_changes {
             items.push(
                 MenuItemFields::new("Add diff set as context")
                     .with_icon(Icon::Paperclip)

@@ -10,7 +10,7 @@ pub use remote::RemoteGitHubRepoModel;
 
 #[cfg(all(test, feature = "local_fs"))]
 use crate::code_review::git_repo_model::GitRepoStatusModel;
-use crate::util::git::{PrInfo, RepositoryInfo};
+use crate::util::git::{PrChecksSummary, PrInfo, RepositoryInfo};
 
 #[cfg_attr(not(feature = "local_fs"), allow(dead_code))]
 #[derive(Debug)]
@@ -56,6 +56,15 @@ impl GitHubRepoModel {
             #[cfg(feature = "local_fs")]
             Self::Local(m) => m.as_ref(ctx).pr_info(),
             Self::Remote(m) => m.as_ref(ctx).pr_info(),
+        }
+    }
+
+    /// CI checks summary for the current branch's PR. Only the local backend fetches checks.
+    pub fn pr_checks(&self, ctx: &AppContext) -> Option<PrChecksSummary> {
+        match self {
+            #[cfg(feature = "local_fs")]
+            Self::Local(m) => m.as_ref(ctx).pr_checks(),
+            Self::Remote(_) => None,
         }
     }
 

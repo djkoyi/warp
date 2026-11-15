@@ -2,6 +2,8 @@ mod action;
 mod active_session;
 pub(crate) mod auto_handoff;
 pub mod bonus_grant_notification_model;
+#[cfg(feature = "local_fs")]
+pub(crate) mod claude_worktrees;
 #[cfg(target_os = "macos")]
 pub(crate) mod claude_tabs;
 pub(crate) mod cli_install;
@@ -787,6 +789,31 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("Workspace"))
         .with_mac_key_binding("cmd-shift-+")
         .with_linux_or_windows_key_binding("ctrl-shift-+"),
+        EditableBinding::new(
+            "workspace:new_claude_worktree_session",
+            BindingDescription::new("Nueva sesión Claude en worktree"),
+            WorkspaceAction::NewClaudeWorktreeSession,
+        )
+        .with_group(bindings::BindingGroup::Terminal.as_str())
+        .with_enabled(|| cfg!(feature = "local_fs"))
+        .with_context_predicate(id!("Workspace") & !id!("Workspace_PaneDragging"))
+        .with_mac_key_binding("cmd-alt-n"),
+        EditableBinding::new(
+            "workspace:list_claude_worktrees",
+            BindingDescription::new("Listar worktrees de Claude"),
+            WorkspaceAction::ListClaudeWorktrees,
+        )
+        .with_group(bindings::BindingGroup::Terminal.as_str())
+        .with_enabled(|| cfg!(feature = "local_fs"))
+        .with_context_predicate(id!("Workspace")),
+        EditableBinding::new(
+            "workspace:cleanup_claude_worktrees",
+            BindingDescription::new("Limpiar worktrees de Claude sin cambios"),
+            WorkspaceAction::CleanupClaudeWorktrees,
+        )
+        .with_group(bindings::BindingGroup::Terminal.as_str())
+        .with_enabled(|| cfg!(feature = "local_fs"))
+        .with_context_predicate(id!("Workspace")),
         EditableBinding::new(
             TOGGLE_VERTICAL_TABS_PANEL_BINDING_NAME,
             BindingDescription::new("Toggle vertical tabs panel")

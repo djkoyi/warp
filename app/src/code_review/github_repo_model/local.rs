@@ -12,8 +12,8 @@ use crate::code_review::git_repo_model::{GitRepoStatusEvent, GitRepoStatusModel}
 use crate::terminal::local_shell::LocalShellState;
 use crate::terminal::session_settings::{GithubPrPromptChipDefaultValidation, SessionSettings};
 use crate::util::git::{
-    PrInfo, RepositoryInfo, get_pr_for_branch, get_repository_info, is_gh_auth_error,
-    is_gh_missing_error,
+    PrChecksSummary, PrInfo, RepositoryInfo, get_pr_with_checks_for_branch, get_repository_info,
+    is_gh_auth_error, is_gh_missing_error,
 };
 
 const PR_INFO_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -56,6 +56,9 @@ pub struct LocalGitHubRepoModel {
     /// PR info for `branch`. `None` means no fetch has succeeded yet, the
     /// branch has no PR, or fetching is suppressed (gh missing/auth error).
     pr_info: Option<PrInfo>,
+    /// CI checks summary for `pr_info`, fetched in the same `gh pr view` call. Cleared together
+    /// with `pr_info`.
+    pr_checks: Option<PrChecksSummary>,
     /// Repository info (name/owner) returned by `gh repo view`. Branch-
     /// independent; fetched on creation and re-checked on the periodic tick.
     repository_info: Option<RepositoryInfo>,
@@ -105,6 +108,7 @@ impl LocalGitHubRepoModel {
                     .map(|m| m.current_branch_name.clone());
                 if new_branch != me.branch {
                     me.branch = new_branch;
+                    me.pr_checks = None;
                     if me.pr_info.take().is_some() {
                         ctx.emit(GitHubRepoEvent::PrInfoChanged);
                     }
@@ -121,6 +125,7 @@ impl LocalGitHubRepoModel {
             git_status,
             branch,
             pr_info: None,
+            pr_checks: None,
             repository_info: None,
             refreshing_pr_info_abort_handle: None,
             repository_info_abort_handle: None,
@@ -161,6 +166,11 @@ impl LocalGitHubRepoModel {
         self.pr_info.as_ref()
     }
 
+    /// CI checks summary for the current branch's PR.
+    pub fn pr_checks(&self) -> Option<PrChecksSummary> {
+        self.pr_checks
+    }
+
     /// Repository info (name/owner) returned by `gh repo view`.
     pub fn repository_info(&self) -> Option<&RepositoryInfo> {
         self.repository_info.as_ref()
@@ -198,7 +208,7 @@ impl LocalGitHubRepoModel {
         let abort_handle = ctx.spawn(
             async move {
                 let path_env = path_future.await;
-                let fetch = get_pr_for_branch(&repo_path, path_env.as_deref());
+                let fetch = get_pr_with_checks_for_branch(&repo_path, path_env.as_deref());
                 let timeout = async_io::Timer::after(PR_INFO_FETCH_TIMEOUT);
                 futures::pin_mut!(fetch);
                 match futures::future::select(fetch, timeout).await {
@@ -276,17 +286,23 @@ impl LocalGitHubRepoModel {
 
     fn handle_fetch_result(
         &mut self,
-        result: anyhow::Result<Option<PrInfo>>,
+        result: anyhow::Result<Option<(PrInfo, Option<PrChecksSummary>)>>,
         branch: String,
         ctx: &mut ModelContext<Self>,
     ) {
         match result {
-            Ok(pr_info) => {
+            Ok(fetched) => {
                 Self::maybe_validate_github_pr_default(ctx);
                 // Only emit when the updated branch is still current.
                 if self.branch.as_deref() == Some(branch.as_str()) {
-                    let changed = self.pr_info.as_ref() != pr_info.as_ref();
+                    let (pr_info, pr_checks) = match fetched {
+                        Some((pr_info, pr_checks)) => (Some(pr_info), pr_checks),
+                        None => (None, None),
+                    };
+                    let changed =
+                        self.pr_info.as_ref() != pr_info.as_ref() || self.pr_checks != pr_checks;
                     self.pr_info = pr_info;
+                    self.pr_checks = pr_checks;
                     if changed {
                         ctx.emit(GitHubRepoEvent::PrInfoChanged);
                     }
@@ -299,6 +315,7 @@ impl LocalGitHubRepoModel {
                         "GitHubRepoModel: suppressing default PR chip \
                          due to deterministic gh setup error"
                     );
+                    self.pr_checks = None;
                     if self.pr_info.take().is_some() {
                         ctx.emit(GitHubRepoEvent::PrInfoChanged);
                     }
@@ -348,6 +365,7 @@ impl LocalGitHubRepoModel {
             git_status,
             branch: None,
             pr_info: None,
+            pr_checks: None,
             repository_info: None,
             refreshing_pr_info_abort_handle: None,
             repository_info_abort_handle: None,

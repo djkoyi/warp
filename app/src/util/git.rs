@@ -739,6 +739,119 @@ pub struct RepositoryInfo {
     pub host: Option<String>,
 }
 
+/// Aggregate CI status of a PR, derived from `gh pr view --json statusCheckRollup`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PrChecksSummary {
+    /// Checks that finished successfully, including neutral and skipped ones.
+    pub passed: u32,
+    pub failed: u32,
+    /// Checks that are queued or still running.
+    pub pending: u32,
+}
+
+impl PrChecksSummary {
+    /// Summarizes a `statusCheckRollup` array, which mixes GitHub `CheckRun` entries
+    /// (`status` + `conclusion`) and commit `StatusContext` entries (`state`). Returns `None` when
+    /// the value is missing or holds no checks.
+    pub fn from_status_check_rollup(rollup: &serde_json::Value) -> Option<Self> {
+        let entries = rollup.as_array()?;
+        let mut summary = Self::default();
+        for entry in entries {
+            match check_outcome(entry) {
+                CheckOutcome::Passed => summary.passed += 1,
+                CheckOutcome::Failed => summary.failed += 1,
+                CheckOutcome::Pending => summary.pending += 1,
+            }
+        }
+        (summary.total() > 0).then_some(summary)
+    }
+
+    pub fn total(&self) -> u32 {
+        self.passed + self.failed + self.pending
+    }
+
+    pub fn status(&self) -> PrChecksStatus {
+        if self.failed > 0 {
+            PrChecksStatus::Failing
+        } else if self.pending > 0 {
+            PrChecksStatus::Pending
+        } else {
+            PrChecksStatus::Passing
+        }
+    }
+
+    /// Short badge for chips, e.g. `CI ✓`, `CI ✗ 2/7`, `CI … 3/7`. Never contains whitespace
+    /// other than single spaces, so it can be appended to a URL with a space separator.
+    pub fn badge(&self) -> String {
+        let total = self.total();
+        match self.status() {
+            PrChecksStatus::Passing => "CI ✓".to_string(),
+            PrChecksStatus::Failing => format!("CI ✗ {}/{total}", self.failed),
+            PrChecksStatus::Pending => format!("CI … {}/{total}", self.passed + self.failed),
+        }
+    }
+}
+
+/// Overall state of a PR's checks, used to color the PR chip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrChecksStatus {
+    Passing,
+    Failing,
+    Pending,
+}
+
+impl PrChecksStatus {
+    /// Inverse of [`PrChecksSummary::badge`] for the status part.
+    pub fn from_badge(badge: &str) -> Option<Self> {
+        let marker = badge.strip_prefix("CI ")?.chars().next()?;
+        match marker {
+            '✓' => Some(Self::Passing),
+            '✗' => Some(Self::Failing),
+            '…' => Some(Self::Pending),
+            _ => None,
+        }
+    }
+}
+
+enum CheckOutcome {
+    Passed,
+    Failed,
+    Pending,
+}
+
+fn check_outcome(entry: &serde_json::Value) -> CheckOutcome {
+    let field = |key: &str| {
+        entry[key]
+            .as_str()
+            .filter(|value| !value.is_empty())
+            .map(str::to_ascii_uppercase)
+    };
+    // gh may serialize every field for both entry kinds, so dispatch on the typename and only
+    // fall back to sniffing `state` when it is absent.
+    let is_status_context = match entry["__typename"].as_str() {
+        Some(typename) => typename == "StatusContext",
+        None => field("state").is_some(),
+    };
+    if is_status_context {
+        return match field("state").as_deref() {
+            Some("SUCCESS") => CheckOutcome::Passed,
+            Some("FAILURE" | "ERROR") => CheckOutcome::Failed,
+            _ => CheckOutcome::Pending,
+        };
+    }
+    // Only a completed check run has a meaningful conclusion.
+    if field("status").is_some_and(|status| status != "COMPLETED") {
+        return CheckOutcome::Pending;
+    }
+    match field("conclusion").as_deref() {
+        Some("SUCCESS" | "NEUTRAL" | "SKIPPED" | "STALE") => CheckOutcome::Passed,
+        Some("FAILURE" | "CANCELLED" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE") => {
+            CheckOutcome::Failed
+        }
+        _ => CheckOutcome::Pending,
+    }
+}
+
 #[cfg(feature = "local_fs")]
 fn repository_info_from_gh_output(output: &str) -> Result<RepositoryInfo> {
     let parsed: serde_json::Value = serde_json::from_str(output.trim())
@@ -849,6 +962,27 @@ async fn run_gh_command(repo_path: &Path, args: &[&str], path_env: Option<&str>)
 /// (auth, network, gh not installed).
 #[cfg(feature = "local_fs")]
 pub async fn get_pr_for_branch(repo_path: &Path, path_env: Option<&str>) -> Result<Option<PrInfo>> {
+    Ok(fetch_pr_for_branch(repo_path, path_env, false)
+        .await?
+        .map(|(pr_info, _)| pr_info))
+}
+
+/// Like [`get_pr_for_branch`], but also requests `statusCheckRollup` and summarizes the PR's CI
+/// checks. The summary is `None` when the PR reports no checks.
+#[cfg(feature = "local_fs")]
+pub async fn get_pr_with_checks_for_branch(
+    repo_path: &Path,
+    path_env: Option<&str>,
+) -> Result<Option<(PrInfo, Option<PrChecksSummary>)>> {
+    fetch_pr_for_branch(repo_path, path_env, true).await
+}
+
+#[cfg(feature = "local_fs")]
+async fn fetch_pr_for_branch(
+    repo_path: &Path,
+    path_env: Option<&str>,
+    include_checks: bool,
+) -> Result<Option<(PrInfo, Option<PrChecksSummary>)>> {
     if run_git_command(repo_path, &["rev-parse", "--is-inside-work-tree"])
         .await
         .is_err()
@@ -862,46 +996,20 @@ pub async fn get_pr_for_branch(repo_path: &Path, path_env: Option<&str>) -> Resu
     {
         return Ok(None);
     }
-    match run_gh_command(
-        repo_path,
-        &[
-            "pr",
-            "view",
-            "--json",
-            "number,url,state,isDraft,baseRefName",
-        ],
-        path_env,
-    )
-    .await
-    {
+    let fields = if include_checks {
+        "number,url,state,isDraft,baseRefName,statusCheckRollup"
+    } else {
+        "number,url,state,isDraft,baseRefName"
+    };
+    match run_gh_command(repo_path, &["pr", "view", "--json", fields], path_env).await {
         Ok(stdout) => {
             let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
                 .map_err(|e| anyhow!("Failed to parse gh output: {e}"))?;
-            let number = parsed["number"]
-                .as_u64()
-                .ok_or_else(|| anyhow!("Missing 'number' in gh output"))?;
-            let url = parsed["url"]
-                .as_str()
-                .ok_or_else(|| anyhow!("Missing 'url' in gh output"))?
-                .to_string();
-            let state = parsed["state"]
-                .as_str()
-                .ok_or_else(|| anyhow!("Missing 'state' in gh output"))?
-                .to_string();
-            let draft = parsed["isDraft"]
-                .as_bool()
-                .ok_or_else(|| anyhow!("Missing 'isDraft' in gh output"))?;
-            let base_branch = parsed["baseRefName"]
-                .as_str()
-                .ok_or_else(|| anyhow!("Missing 'baseRefName' in gh output"))?
-                .to_string();
-            Ok(Some(PrInfo {
-                number,
-                url,
-                state,
-                draft,
-                base_branch,
-            }))
+            let pr_info = pr_info_from_gh_json(&parsed)?;
+            let checks = include_checks
+                .then(|| PrChecksSummary::from_status_check_rollup(&parsed["statusCheckRollup"]))
+                .flatten();
+            Ok(Some((pr_info, checks)))
         }
         Err(e) => {
             let msg = e.to_string();
@@ -912,6 +1020,35 @@ pub async fn get_pr_for_branch(repo_path: &Path, path_env: Option<&str>) -> Resu
             }
         }
     }
+}
+
+#[cfg(feature = "local_fs")]
+fn pr_info_from_gh_json(parsed: &serde_json::Value) -> Result<PrInfo> {
+    let number = parsed["number"]
+        .as_u64()
+        .ok_or_else(|| anyhow!("Missing 'number' in gh output"))?;
+    let url = parsed["url"]
+        .as_str()
+        .ok_or_else(|| anyhow!("Missing 'url' in gh output"))?
+        .to_string();
+    let state = parsed["state"]
+        .as_str()
+        .ok_or_else(|| anyhow!("Missing 'state' in gh output"))?
+        .to_string();
+    let draft = parsed["isDraft"]
+        .as_bool()
+        .ok_or_else(|| anyhow!("Missing 'isDraft' in gh output"))?;
+    let base_branch = parsed["baseRefName"]
+        .as_str()
+        .ok_or_else(|| anyhow!("Missing 'baseRefName' in gh output"))?
+        .to_string();
+    Ok(PrInfo {
+        number,
+        url,
+        state,
+        draft,
+        base_branch,
+    })
 }
 
 #[cfg(not(feature = "local_fs"))]
