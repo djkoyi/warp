@@ -3,6 +3,7 @@ mod active_session;
 pub(crate) mod auto_handoff;
 pub mod bonus_grant_notification_model;
 #[cfg(target_os = "macos")]
+pub(crate) mod claude_tabs;
 pub(crate) mod cli_install;
 mod close_session_confirmation_dialog;
 pub(crate) mod cross_window_tab_drag;
@@ -738,6 +739,14 @@ pub fn init(app: &mut AppContext) {
         )
         .with_context_predicate(id!("Workspace") & !id!("Workspace_PaneDragging"))
         .with_custom_action(CustomAction::NewTerminalTab)
+        .with_enabled(|| ContextFlag::CreateNewSession.is_enabled()),
+        EditableBinding::new(
+            "workspace:new_claude_tab_here",
+            BindingDescription::new("Nueva pestaña con Claude aquí"),
+            WorkspaceAction::AddClaudeTabHere,
+        )
+        .with_context_predicate(id!("Workspace") & !id!("Workspace_PaneDragging"))
+        .with_mac_key_binding("ctrl-cmd-c")
         .with_enabled(|| ContextFlag::CreateNewSession.is_enabled()),
         EditableBinding::new(
             NEW_AGENT_TAB_BINDING_NAME,

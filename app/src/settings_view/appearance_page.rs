@@ -425,6 +425,24 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
     ));
 
     toggle_binding_pairs.push(ToggleSettingActionPair::new(
+        "automatic tab names",
+        builder(SettingsAction::AppearancePageToggle(
+            AppearancePageAction::ToggleAutoTabNames,
+        )),
+        context,
+        flags::AUTO_TAB_NAMES_FLAG,
+    ));
+
+    toggle_binding_pairs.push(ToggleSettingActionPair::new(
+        "automatic tab colors",
+        builder(SettingsAction::AppearancePageToggle(
+            AppearancePageAction::ToggleAutoTabColors,
+        )),
+        context,
+        flags::AUTO_TAB_COLORS_FLAG,
+    ));
+
+    toggle_binding_pairs.push(ToggleSettingActionPair::new(
         "custom padding in alt-screen",
         builder(SettingsAction::AppearancePageToggle(
             AppearancePageAction::ToggleAltScreenPadding,
@@ -491,6 +509,8 @@ pub enum AppearancePageAction {
     ToggleTabIndicators,
     ToggleShowCodeReviewButton,
     TogglePreserveActiveTabColor,
+    ToggleAutoTabNames,
+    ToggleAutoTabColors,
     ToggleVerticalTabs,
     ToggleShowVerticalTabPanelInRestoredWindows,
     ToggleHideTitleBarSearchBarInVerticalTabs,
@@ -674,6 +694,18 @@ impl TypedActionView for AppearanceSettingsPageView {
             ToggleTabIndicators => self.toggle_tab_indicators(ctx),
             ToggleShowCodeReviewButton => self.toggle_show_code_review_button(ctx),
             TogglePreserveActiveTabColor => self.toggle_preserve_active_tab_color(ctx),
+            ToggleAutoTabNames => {
+                let tab_settings = TabSettings::handle(ctx);
+                ctx.update_model(&tab_settings, |tab_settings, ctx| {
+                    report_if_error!(tab_settings.auto_tab_names.toggle_and_save_value(ctx));
+                });
+            }
+            ToggleAutoTabColors => {
+                let tab_settings = TabSettings::handle(ctx);
+                ctx.update_model(&tab_settings, |tab_settings, ctx| {
+                    report_if_error!(tab_settings.auto_tab_colors.toggle_and_save_value(ctx));
+                });
+            }
             ToggleVerticalTabs => self.toggle_vertical_tabs(ctx),
             ToggleShowVerticalTabPanelInRestoredWindows => {
                 self.toggle_show_vertical_tab_panel_in_restored_windows(ctx)
