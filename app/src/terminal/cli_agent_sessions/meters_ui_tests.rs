@@ -1,6 +1,6 @@
 use super::*;
 use crate::terminal::cli_agent_sessions::meters::{
-    CompactTrigger, CompactionState, RateLimitWindow,
+    CompactTrigger, CompactionState, GlobalMeters, RateLimitWindow,
 };
 
 fn texts(segments: &[MeterSegment]) -> Vec<&str> {
