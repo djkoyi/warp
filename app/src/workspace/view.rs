@@ -21418,7 +21418,7 @@ impl Workspace {
             ..Default::default()
         };
         let hover_styles = UiComponentStyles {
-            background: Some(internal_colors::fg_overlay_2(theme)),
+            background: Some(internal_colors::fg_overlay_2(theme).into()),
             ..default_styles
         };
 
