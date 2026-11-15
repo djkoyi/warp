@@ -1178,6 +1178,11 @@ pub struct Workspace {
     /// Segments the global usage chip (top bar) showed at the last re-render, so meter updates that
     /// only change the account 5h/7d/cost still repaint it even when the tab is unchanged.
     rendered_global_meter_segments: Vec<MeterSegment>,
+    /// Last parsed snapshot of the puente broker, shown by the top-bar status chip.
+    puente_status: PuenteStatus,
+    /// Bumped whenever the puente poller is (re)started or stopped; an in-flight poll whose
+    /// generation no longer matches drops its result and does not reschedule itself.
+    puente_poll_generation: u64,
     cloud_agent_capacity_modal: ViewHandle<CloudAgentCapacityModal>,
     free_ai_removal_modal: ViewHandle<FreeAiRemovalModal>,
     /// Second instance of the free-AI-removal modal, opened on demand when a
