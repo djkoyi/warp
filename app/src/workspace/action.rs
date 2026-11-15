@@ -1145,6 +1145,7 @@ impl WorkspaceAction {
             | ToggleVerticalTabsShowDetailsOnHover
             | ToggleVerticalTabsClaudeField(_)
             | ToggleShowAccountUsageChip
+            | ToggleShowPuenteStatusChip
             | ToggleWelcomeTips
             | CopyTextToClipboard(_)
             | CopyCurrentPath
