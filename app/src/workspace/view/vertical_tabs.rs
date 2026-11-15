@@ -731,6 +731,7 @@ pub(super) struct VerticalTabsPanelState {
     show_diff_stats_mouse_state: MouseStateHandle,
     show_details_on_hover_mouse_state: MouseStateHandle,
     claude_field_mouse_states: [MouseStateHandle; ClaudeTabField::ALL.len()],
+    show_account_usage_chip_mouse_state: MouseStateHandle,
     panel_right_click_mouse_state: MouseStateHandle,
     pub(super) show_settings_popup: bool,
 }
