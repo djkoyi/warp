@@ -7106,6 +7106,17 @@ impl Workspace {
             }
         }
 
+        // 2b. Claude Code: new tab running `claude` in the current directory, so it can be
+        // opened from the menu without remembering a shortcut.
+        if ContextFlag::CreateNewSession.is_enabled() {
+            menu_items.push(
+                MenuItemFields::new("Claude Code")
+                    .with_on_select_action(WorkspaceAction::AddClaudeTabHere)
+                    .with_icon(icons::Icon::ClaudeLogo)
+                    .into_item(),
+            );
+        }
+
         // 3. Cloud Agent (if flags enabled)
         if is_any_ai_enabled
             && FeatureFlag::AgentView.is_enabled()
