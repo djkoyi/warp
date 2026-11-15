@@ -117,6 +117,60 @@ pub(crate) fn rate_limit_tone(used_pct: f32) -> MeterTone {
     }
 }
 
+/// Compact colored segments for the global account-usage chip in the top bar: `5h 42%`, `7d 18%`
+/// and the accumulated cost. The reset countdown lives only in the tooltip, so these segments are
+/// stable minute to minute and can also drive the chip's repaint check.
+pub fn global_chip_segments(global: &GlobalMeters) -> Vec<MeterSegment> {
+    let mut segments = Vec::new();
+    if let Some(window) = global.five_hour {
+        segments.push(MeterSegment::new(
+            format!("5h {}", format_pct(window.used_pct)),
+            rate_limit_tone(window.used_pct),
+        ));
+    }
+    if let Some(window) = global.seven_day {
+        segments.push(MeterSegment::new(
+            format!("7d {}", format_pct(window.used_pct)),
+            rate_limit_tone(window.used_pct),
+        ));
+    }
+    if let Some(cost) = global.cost_usd {
+        segments.push(MeterSegment::new(format_cost(cost), MeterTone::Normal));
+    }
+    segments
+}
+
+/// Tooltip lines (Spanish) for the global usage chip: the 5h and 7d limits with their reset
+/// countdown, and the accumulated cost.
+pub fn global_chip_tooltip_lines(global: &GlobalMeters, now: i64) -> Vec<String> {
+    let mut lines = Vec::new();
+    if let Some(window) = global.five_hour {
+        lines.push(format!(
+            "Límite de 5 h: {}{}",
+            format_pct(window.used_pct),
+            reset_suffix(window.resets_at, now)
+        ));
+    }
+    if let Some(window) = global.seven_day {
+        lines.push(format!(
+            "Límite de 7 días: {}{}",
+            format_pct(window.used_pct),
+            reset_suffix(window.resets_at, now)
+        ));
+    }
+    if let Some(cost) = global.cost_usd {
+        lines.push(format!("Costo: {}", format_cost(cost)));
+    }
+    lines
+}
+
+fn reset_suffix(resets_at: Option<i64>, now: i64) -> String {
+    resets_at
+        .and_then(|at| format_reset_in(at, now))
+        .map(|left| format!(" (se reinicia en {left})"))
+        .unwrap_or_default()
+}
+
 /// Short segments for a tab: context usage and activity, e.g. `42%` `waiting for you`.
 pub fn tab_segments(
     activity: Option<CLIAgentActivity>,
