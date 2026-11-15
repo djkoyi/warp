@@ -4514,8 +4514,19 @@ impl Workspace {
                 self.trigger_get_started_onboarding(ctx);
             } else if shell.is_none() && *TabSettings::as_ref(ctx).claude_open_on_new_window.value() {
                 // CSS fork: this build is dedicated to Claude Code, so a window with nothing to
-                // restore starts with Claude instead of an empty shell.
-                self.add_claude_tab_here(ctx);
+                // restore starts with Claude instead of an empty shell. There is no active tab
+                // yet, so this cannot go through `add_claude_tab_here` (it reads the active
+                // session's directory); the new tab starts in the default directory.
+                let command = TabSettings::as_ref(ctx).claude_command.value().clone();
+                self.add_tab_with_pane_layout(
+                    PanesLayout::Template(claude_tabs::claude_pane_template(
+                        Default::default(),
+                        &command,
+                    )),
+                    Arc::new(HashMap::new()),
+                    None,
+                    ctx,
+                );
                 self.check_and_trigger_onboarding(ctx);
             } else {
                 self.add_new_session_tab_with_default_mode(
