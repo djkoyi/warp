@@ -25782,6 +25782,14 @@ impl TypedActionView for Workspace {
                 });
                 ctx.notify();
             }
+            ToggleShowPuenteStatusChip => {
+                TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+                    let new_value = !*settings.show_puente_status_chip.value();
+                    let _ = settings.show_puente_status_chip.set_value(new_value, ctx);
+                });
+                self.restart_puente_poller(ctx);
+                ctx.notify();
+            }
             ToggleAgentManagementView => {
                 if AISettings::as_ref(ctx).is_any_ai_enabled(ctx)
                     && FeatureFlag::AgentManagementView.is_enabled()
