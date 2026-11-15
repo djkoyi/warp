@@ -21363,7 +21363,7 @@ impl Workspace {
         appearance: &Appearance,
         ctx: &AppContext,
     ) -> Option<Box<dyn Element>> {
-        if !meters_ui::meters_enabled(ctx) {
+        if !meters_ui::meters_enabled(ctx) || !*TabSettings::as_ref(ctx).show_account_usage_chip {
             return None;
         }
         let global = CLIAgentSessionsModel::as_ref(ctx).global_meters()?;
