@@ -21391,11 +21391,12 @@ impl Workspace {
         ctx.spawn(
             async move {
                 if !immediate {
-                    warpui::r#async::Timer::after(puente_status::PUENTE_POLL_INTERVAL).await;
+                    tokio::time::sleep(puente_status::PUENTE_POLL_INTERVAL).await;
                 }
                 let script_path = PathBuf::from(script);
-                let join =
-                    tokio::task::spawn_blocking(move || puente_status::run_puente_script(&script_path));
+                let join = tokio::task::spawn_blocking(move || {
+                    puente_status::run_puente_script(&script_path)
+                });
                 match tokio::time::timeout(puente_status::PUENTE_HARD_TIMEOUT, join).await {
                     Ok(Ok(status)) => status,
                     _ => PuenteStatus::Unavailable,
