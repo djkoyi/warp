@@ -461,6 +461,9 @@ settings::macros::implement_setting_for_enum!(
 /// Tests look tabs up by their shell-derived title, so they keep the upstream naming.
 const AUTO_TAB_NAMES_DEFAULT: bool = !cfg!(any(test, feature = "integration_tests"));
 
+/// Most conversations "Retomar todas las sesiones de Claude" opens at once in one click.
+const CLAUDE_RESUME_ALL_LIMIT_DEFAULT: usize = 15;
+
 define_settings_group!(TabSettings, settings: [
     show_indicators: ShowIndicatorsButton {
         type: bool,
