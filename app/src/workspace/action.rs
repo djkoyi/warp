@@ -1035,6 +1035,7 @@ impl WorkspaceAction {
             | AddDockerSandboxTab
             | AddClaudeTabHere
             | ResumeClaudeSession { .. }
+            | ResumeAllRecentClaudeSessions
             | AddWindow
             | AddWindowWithShell { .. }
             | CloseWindow
