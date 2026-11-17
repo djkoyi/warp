@@ -4017,6 +4017,7 @@ impl Workspace {
             | TabSettingsChangedEvent::VerticalTabsClaudeShowLines { .. }
             | TabSettingsChangedEvent::VerticalTabsClaudeShowStatus { .. }
             | TabSettingsChangedEvent::ShowAccountUsageChip { .. }
+            | TabSettingsChangedEvent::ClaudeResumeAllLimit { .. }
             | TabSettingsChangedEvent::HideTitleBarSearchBarInVerticalTabs { .. } => {
                 ctx.notify();
             }
