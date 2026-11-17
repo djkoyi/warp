@@ -280,6 +280,14 @@ pub fn secure_state_dir() -> Option<PathBuf> {
         return None;
     }
 
+    // CSS fork: the Oss channel keeps its state in its own private Application Support directory
+    // instead of the shared App Group container, so macOS never prompts for access to other apps'
+    // data and WarpOss's state stays fully separate from the official Warp.
+    #[cfg(target_os = "macos")]
+    if ChannelState::channel() == Channel::Oss {
+        return project_dirs().map(|dirs| dirs.data_dir().to_owned());
+    }
+
     #[cfg(target_os = "macos")]
     if let Some(app_group_root) = app_group_container_path() {
         // The macOS project_path is the bundle ID (i.e. `dev.warp.Warp-Stable`).
