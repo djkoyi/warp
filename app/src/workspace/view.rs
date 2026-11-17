@@ -25010,6 +25010,7 @@ impl TypedActionView for Workspace {
             ResumeClaudeSession { session_id, cwd } => {
                 self.resume_claude_session(session_id, cwd, ctx)
             }
+            ResumeAllRecentClaudeSessions => self.resume_all_recent_claude_sessions(ctx),
             StartAgentOnboardingTutorial(tutorial) => {
                 self.start_agent_onboarding_tutorial(tutorial.clone(), ctx)
             }
