@@ -269,6 +269,8 @@ pub enum WorkspaceAction {
         session_id: String,
         cwd: String,
     },
+    /// Open one new tab resuming each of the most recent resumable Claude Code conversations.
+    ResumeAllRecentClaudeSessions,
     OpenNewSessionMenu {
         anchor: NewSessionMenuAnchor,
     },
