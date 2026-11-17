@@ -150,6 +150,26 @@ fn puente_status_script_uses_claude_path() {
 }
 
 #[test]
+fn claude_resume_all_limit_defaults_to_fifteen() {
+    App::test((), |mut app| async move {
+        initialize_settings_for_tests(&mut app);
+
+        TabSettings::handle(&app).read(&app, |settings, _ctx| {
+            assert_eq!(*settings.claude_resume_all_limit.value(), 15);
+        });
+    });
+}
+
+#[test]
+fn claude_resume_all_limit_uses_claude_path() {
+    assert_eq!(
+        ClaudeResumeAllLimit::toml_path(),
+        Some("claude.resume_all_limit")
+    );
+    assert_eq!(ClaudeResumeAllLimit::toml_key(), "resume_all_limit");
+}
+
+#[test]
 fn header_toolbar_chip_selection_default_contains_code_review() {
     let config = HeaderToolbarChipSelection::Default;
     assert!(config.contains_item(&HeaderToolbarItemKind::CodeReview));
