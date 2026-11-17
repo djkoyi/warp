@@ -12897,28 +12897,35 @@ impl Workspace {
         );
     }
 
-    /// Opens a new tab in `cwd` running `claude --resume <session_id>` plus the configured resume
-    /// flags. The directory travels as the pane's path, never on the command line.
-    fn resume_claude_session(&mut self, session_id: &str, cwd: &str, ctx: &mut ViewContext<Self>) {
-        let Some(resume) = ClaudeCodeResume::from_persisted(Some(session_id.to_string()), None)
-        else {
-            log::warn!("Ignoring Claude Code resume with an invalid session id");
-            return;
-        };
-        let shell_type = self
-            .active_session_view(ctx)
+    /// Shell the resume command is quoted for: the active session's shell, else `$SHELL`, else zsh.
+    fn claude_resume_shell_type(&self, ctx: &mut ViewContext<Self>) -> ShellType {
+        self.active_session_view(ctx)
             .and_then(|view| view.as_ref(ctx).active_session_shell_type(ctx))
             .or_else(|| {
                 std::env::var("SHELL")
                     .ok()
                     .and_then(|shell| ShellType::from_name(&shell))
             })
-            .unwrap_or(ShellType::Zsh);
-        let flags = GeneralSettings::as_ref(ctx)
-            .claude_code_resume_flags
-            .value()
-            .clone();
-        let command = resume.command(&flags, shell_type);
+            .unwrap_or(ShellType::Zsh)
+    }
+
+    /// Opens a new tab in `cwd` running `claude --resume <session_id>` plus `flags`. The directory
+    /// travels as the pane's path, never on the command line, and falls back to the default
+    /// directory when it no longer exists.
+    fn open_claude_resume_tab(
+        &mut self,
+        session_id: &str,
+        cwd: &str,
+        flags: &str,
+        shell_type: ShellType,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let Some(resume) = ClaudeCodeResume::from_persisted(Some(session_id.to_string()), None)
+        else {
+            log::warn!("Ignoring Claude Code resume with an invalid session id");
+            return;
+        };
+        let command = resume.command(flags, shell_type);
         let cwd = PathBuf::from(cwd);
         let cwd = if cwd.is_absolute() && cwd.is_dir() {
             cwd
@@ -12931,6 +12938,58 @@ impl Workspace {
             Arc::new(HashMap::new()),
             None,
             ctx,
+        );
+    }
+
+    /// Opens a new tab in `cwd` running `claude --resume <session_id>` plus the configured resume
+    /// flags. The directory travels as the pane's path, never on the command line.
+    fn resume_claude_session(&mut self, session_id: &str, cwd: &str, ctx: &mut ViewContext<Self>) {
+        let shell_type = self.claude_resume_shell_type(ctx);
+        let flags = GeneralSettings::as_ref(ctx)
+            .claude_code_resume_flags
+            .value()
+            .clone();
+        self.open_claude_resume_tab(session_id, cwd, &flags, shell_type, ctx);
+    }
+
+    /// Opens one new tab per recent resumable Claude Code conversation, newest first, up to the
+    /// `claude.resume_all_limit` setting. Transcripts are scanned off the UI thread; the tabs are
+    /// opened on the UI thread once the scan resolves. Opens nothing when there is none to resume.
+    fn resume_all_recent_claude_sessions(&mut self, ctx: &mut ViewContext<Self>) {
+        // Defensive cap so a slow or stuck transcript scan can never hang tab creation.
+        const READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+        let limit = *TabSettings::as_ref(ctx).claude_resume_all_limit;
+        let shell_type = self.claude_resume_shell_type(ctx);
+        let flags = GeneralSettings::as_ref(ctx)
+            .claude_code_resume_flags
+            .value()
+            .clone();
+        ctx.spawn(
+            async move {
+                let join = tokio::task::spawn_blocking(move || {
+                    crate::terminal::claude_sessions_index::projects_dir()
+                        .map(|dir| {
+                            crate::terminal::claude_sessions_index::recent_sessions(&dir, limit)
+                        })
+                        .unwrap_or_default()
+                });
+                match tokio::time::timeout(READ_TIMEOUT, join).await {
+                    Ok(Ok(sessions)) => sessions,
+                    _ => Vec::new(),
+                }
+            },
+            move |me, sessions, ctx| {
+                for session in sessions {
+                    me.open_claude_resume_tab(
+                        &session.session_id,
+                        &session.cwd,
+                        &flags,
+                        shell_type,
+                        ctx,
+                    );
+                }
+            },
         );
     }
 
