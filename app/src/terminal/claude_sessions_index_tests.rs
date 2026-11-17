@@ -185,6 +185,39 @@ fn recent_sessions_are_newest_first_limited_and_ignore_other_files() {
 }
 
 #[test]
+fn resume_all_selects_newest_resumable_sessions_within_limit() {
+    let dir = tempfile::tempdir().unwrap();
+    let now = SystemTime::now();
+    let newest = write_transcript(dir.path(), "-tmp-a", ID_A, &[user_line("/tmp/a", json!("a"))]);
+    let middle = write_transcript(dir.path(), "-tmp-b", ID_B, &[user_line("/tmp/b", json!("b"))]);
+    let oldest = write_transcript(dir.path(), "-tmp-c", ID_C, &[user_line("/tmp/c", json!("c"))]);
+    set_modified(&newest, now - Duration::from_secs(10));
+    set_modified(&middle, now - Duration::from_secs(100));
+    set_modified(&oldest, now - Duration::from_secs(1000));
+
+    // A transcript with no user message is not resumable and must never be opened.
+    let empty = write_transcript(
+        dir.path(),
+        "-tmp-b",
+        "3c4d5e6f-7a8b-4c9d-0e1f-2a3b4c5d6e7f",
+        &[json!({"type": "permission-mode", "permissionMode": "default"}).to_string()],
+    );
+    set_modified(&empty, now - Duration::from_secs(1));
+
+    let ids: Vec<String> = recent_sessions(dir.path(), 15)
+        .into_iter()
+        .map(|entry| entry.session_id)
+        .collect();
+    assert_eq!(ids, [ID_A, ID_B, ID_C]);
+
+    let limited: Vec<String> = recent_sessions(dir.path(), 2)
+        .into_iter()
+        .map(|entry| entry.session_id)
+        .collect();
+    assert_eq!(limited, [ID_A, ID_B]);
+}
+
+#[test]
 fn missing_projects_dir_yields_nothing() {
     let dir = tempfile::tempdir().unwrap();
     assert!(recent_sessions(&dir.path().join("no-existe"), 30).is_empty());
