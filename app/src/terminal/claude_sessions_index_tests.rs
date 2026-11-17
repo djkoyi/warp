@@ -82,7 +82,9 @@ fn latest_saved_title_wins_and_custom_title_beats_generated_one() {
         ],
     );
     assert_eq!(
-        read_session(&generated, SystemTime::UNIX_EPOCH).unwrap().title,
+        read_session(&generated, SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .title,
         "Titulo nuevo"
     );
 
@@ -111,7 +113,9 @@ fn latest_saved_title_wins_and_custom_title_beats_generated_one() {
         ],
     );
     assert_eq!(
-        read_session(&summary, SystemTime::UNIX_EPOCH).unwrap().title,
+        read_session(&summary, SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .title,
         "Resumen antiguo"
     );
 }
@@ -125,7 +129,10 @@ fn transcripts_without_user_messages_are_skipped() {
         ID_A,
         &[
             json!({"type": "permission-mode", "permissionMode": "default"}).to_string(),
-            user_line("/tmp/demo", json!("<local-command-stdout></local-command-stdout>")),
+            user_line(
+                "/tmp/demo",
+                json!("<local-command-stdout></local-command-stdout>"),
+            ),
             json!({"type": "user", "cwd": "/tmp/demo",
                    "message": {"content": [{"type": "tool_result", "content": "x"}]}})
             .to_string(),
@@ -160,17 +167,41 @@ fn title_is_found_past_a_large_middle_and_cwd_past_large_attachments() {
 fn recent_sessions_are_newest_first_limited_and_ignore_other_files() {
     let dir = tempfile::tempdir().unwrap();
     let now = SystemTime::now();
-    let old = write_transcript(dir.path(), "-tmp-a", ID_A, &[user_line("/tmp/a", json!("a"))]);
-    let new = write_transcript(dir.path(), "-tmp-b", ID_B, &[user_line("/tmp/b", json!("b"))]);
-    let mid = write_transcript(dir.path(), "-tmp-a", ID_C, &[user_line("/tmp/a", json!("c"))]);
+    let old = write_transcript(
+        dir.path(),
+        "-tmp-a",
+        ID_A,
+        &[user_line("/tmp/a", json!("a"))],
+    );
+    let new = write_transcript(
+        dir.path(),
+        "-tmp-b",
+        ID_B,
+        &[user_line("/tmp/b", json!("b"))],
+    );
+    let mid = write_transcript(
+        dir.path(),
+        "-tmp-a",
+        ID_C,
+        &[user_line("/tmp/a", json!("c"))],
+    );
     set_modified(&old, now - Duration::from_secs(300));
     set_modified(&new, now - Duration::from_secs(10));
     set_modified(&mid, now - Duration::from_secs(100));
 
     // Not transcripts of a resumable session.
-    write_transcript(dir.path(), "-tmp-a", "agent-1234", &[user_line("/tmp/a", json!("x"))]);
+    write_transcript(
+        dir.path(),
+        "-tmp-a",
+        "agent-1234",
+        &[user_line("/tmp/a", json!("x"))],
+    );
     fs::write(dir.path().join("-tmp-a").join("notas.txt"), "x").unwrap();
-    fs::write(dir.path().join("suelto.jsonl"), user_line("/tmp", json!("x"))).unwrap();
+    fs::write(
+        dir.path().join("suelto.jsonl"),
+        user_line("/tmp", json!("x")),
+    )
+    .unwrap();
     fs::write(dir.path().join("-tmp-a").join(format!("{ID_A}x.jsonl")), "").unwrap();
 
     let ids: Vec<String> = recent_sessions(dir.path(), 30)
@@ -188,9 +219,24 @@ fn recent_sessions_are_newest_first_limited_and_ignore_other_files() {
 fn resume_all_selects_newest_resumable_sessions_within_limit() {
     let dir = tempfile::tempdir().unwrap();
     let now = SystemTime::now();
-    let newest = write_transcript(dir.path(), "-tmp-a", ID_A, &[user_line("/tmp/a", json!("a"))]);
-    let middle = write_transcript(dir.path(), "-tmp-b", ID_B, &[user_line("/tmp/b", json!("b"))]);
-    let oldest = write_transcript(dir.path(), "-tmp-c", ID_C, &[user_line("/tmp/c", json!("c"))]);
+    let newest = write_transcript(
+        dir.path(),
+        "-tmp-a",
+        ID_A,
+        &[user_line("/tmp/a", json!("a"))],
+    );
+    let middle = write_transcript(
+        dir.path(),
+        "-tmp-b",
+        ID_B,
+        &[user_line("/tmp/b", json!("b"))],
+    );
+    let oldest = write_transcript(
+        dir.path(),
+        "-tmp-c",
+        ID_C,
+        &[user_line("/tmp/c", json!("c"))],
+    );
     set_modified(&newest, now - Duration::from_secs(10));
     set_modified(&middle, now - Duration::from_secs(100));
     set_modified(&oldest, now - Duration::from_secs(1000));
@@ -234,7 +280,10 @@ fn long_prompts_are_cut_to_the_title_length() {
 #[test]
 fn cwd_under_home_is_shown_with_tilde() {
     let home = Path::new("/Users/demo");
-    assert_eq!(display_cwd("/Users/demo/proyecto", Some(home)), "~/proyecto");
+    assert_eq!(
+        display_cwd("/Users/demo/proyecto", Some(home)),
+        "~/proyecto"
+    );
     assert_eq!(display_cwd("/Users/demo", Some(home)), "~");
     assert_eq!(display_cwd("/Users/demo2/x", Some(home)), "/Users/demo2/x");
     assert_eq!(display_cwd("/opt/x", None), "/opt/x");
@@ -254,5 +303,8 @@ fn relative_time_is_spanish() {
     assert_eq!(ago(31 * 24 * 3600), "hace 1 mes");
     assert_eq!(ago(65 * 24 * 3600), "hace 2 meses");
     // A clock that moved backwards must not panic.
-    assert_eq!(relative_time_es(now, now + Duration::from_secs(60)), "ahora mismo");
+    assert_eq!(
+        relative_time_es(now, now + Duration::from_secs(60)),
+        "ahora mismo"
+    );
 }
