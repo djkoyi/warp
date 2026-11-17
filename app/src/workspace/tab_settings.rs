@@ -546,6 +546,16 @@ define_settings_group!(TabSettings, settings: [
         max_table_depth: 0,
         description: "Named workspaces: each maps a name to the project directories opened as Claude tabs.",
     },
+    claude_resume_all_limit: ClaudeResumeAllLimit {
+        type: usize,
+        default: CLAUDE_RESUME_ALL_LIMIT_DEFAULT,
+        supported_platforms: SupportedPlatforms::ALL,
+        sync_to_cloud: SyncToCloud::Never,
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "claude.resume_all_limit",
+        description: "Maximum number of conversations opened at once by \"Retomar todas las sesiones de Claude\".",
+    },
     preserve_active_tab_color: PreserveActiveTabColor {
         type: bool,
         default: false,
