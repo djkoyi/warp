@@ -7209,6 +7209,12 @@ impl Workspace {
                     .with_icon(icons::Icon::ClaudeLogo)
                     .into_item(),
             );
+            menu_items.push(
+                MenuItemFields::new("Retomar todas las sesiones de Claude")
+                    .with_on_select_action(WorkspaceAction::ResumeAllRecentClaudeSessions)
+                    .with_icon(icons::Icon::ClaudeLogo)
+                    .into_item(),
+            );
         }
 
         // 3. Cloud Agent (if flags enabled)
