@@ -78,3 +78,19 @@ fn puente_tooltip_lista_equipos_y_resume_el_resto() {
     assert_eq!(lines[1], "C1 - host-1 (Linux) [libre]");
     assert_eq!(lines[MAX_TOOLTIP_EQUIPOS], "(+2 más)");
 }
+
+#[test]
+fn puente_acepta_las_claves_en_minusculas_de_puentectl() {
+    let json = br#"[
+        {"code":"786123","host":"nb1-denit","os":"windows","os_name":"Microsoft Windows 11",
+         "arch":"amd64","user":"CSS\\usuario","caps":["shell"],"network":"CSS","managed":false,
+         "since_ms":1795033300521,"in_use":true}
+    ]"#;
+    let status = parse_puente_output(json);
+
+    assert_eq!(status.label(), "puente: 1 equipo · 1 en uso");
+    assert_eq!(
+        status.tooltip_lines(),
+        vec!["786123 - nb1-denit (Microsoft Windows 11) [en uso]".to_string()]
+    );
+}

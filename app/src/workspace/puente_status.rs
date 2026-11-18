@@ -23,13 +23,14 @@ const MAX_TOOLTIP_EQUIPOS: usize = 6;
 /// Un equipo conectado al broker, tal como lo reporta el script.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct PuenteEquipo {
-    #[serde(rename = "Code", default)]
+    // `puentectl list --json` emite las claves en minusculas; versiones anteriores, en PascalCase.
+    #[serde(rename = "Code", alias = "code", default)]
     pub code: String,
-    #[serde(rename = "Host", default)]
+    #[serde(rename = "Host", alias = "host", default)]
     pub host: String,
-    #[serde(rename = "OSName", default)]
+    #[serde(rename = "OSName", alias = "os_name", default)]
     pub os_name: String,
-    #[serde(rename = "InUse", default)]
+    #[serde(rename = "InUse", alias = "in_use", default)]
     pub in_use: bool,
 }
 
