@@ -1341,17 +1341,34 @@ pub extern "C-unwind" fn warp_ime_position(object: &mut Object, content_rect: NS
         content_rect.size.height as f32,
     );
 
+    let (candidate_x, candidate_y) = match cursor_info {
+        Some(cursor_info) => (
+            content_rect.origin.x + cursor_info.position.origin_x() as f64,
+            content_rect.origin.y + (size.y() - cursor_info.position.origin_y()) as f64
+                - (1.2 * cursor_info.font_size) as f64,
+        ),
+        None => (
+            content_rect.origin.x,
+            content_rect.origin.y + size.y() as f64,
+        ),
+    };
+
+    // macOS hides the keyboard-dictation HUD and refuses to commit dictated text when the reported
+    // insertion point falls outside the window (logged as "Insertion point isn't within the
+    // window, hiding window"). A focused full-screen TUI (e.g. Claude) can leave the cursor element
+    // unlaid-out or reporting coordinates outside the content rect, so clamp the point to stay
+    // strictly inside the content area. This is a no-op for the ordinary command-editor case, whose
+    // computed position already lies well within the window.
+    const EDGE_INSET: f64 = 2.0;
+    let min_x = content_rect.origin.x + EDGE_INSET;
+    let max_x = (content_rect.origin.x + content_rect.size.width - EDGE_INSET).max(min_x);
+    let min_y = content_rect.origin.y + EDGE_INSET;
+    let max_y = (content_rect.origin.y + content_rect.size.height - EDGE_INSET).max(min_y);
+
     NSRect {
-        origin: match cursor_info {
-            Some(cursor_info) => NSPoint {
-                x: content_rect.origin.x + cursor_info.position.origin_x() as f64,
-                y: content_rect.origin.y + (size.y() - cursor_info.position.origin_y()) as f64
-                    - (1.2 * cursor_info.font_size) as f64,
-            },
-            None => NSPoint {
-                x: content_rect.origin.x,
-                y: content_rect.origin.y + size.y() as f64,
-            },
+        origin: NSPoint {
+            x: candidate_x.clamp(min_x, max_x),
+            y: candidate_y.clamp(min_y, max_y),
         },
         size: NSSize::new(0., 0.),
     }
