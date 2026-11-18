@@ -127,15 +127,12 @@ fn show_puente_status_chip_uses_claude_path() {
 }
 
 #[test]
-fn puente_status_script_defaults_to_configured_path() {
+fn puente_status_script_defaults_to_empty() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
 
         TabSettings::handle(&app).read(&app, |settings, _ctx| {
-            assert_eq!(
-                settings.puente_status_script.value().as_str(),
-                "/Users/franklrodriguez/RiderProjects/puente/bin/puente-list-json.sh"
-            );
+            assert_eq!(settings.puente_status_script.value().as_str(), "");
         });
     });
 }
