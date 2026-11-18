@@ -107,12 +107,12 @@ fn show_account_usage_chip_uses_claude_path() {
 }
 
 #[test]
-fn show_puente_status_chip_defaults_to_true() {
+fn show_puente_status_chip_defaults_to_false() {
     App::test((), |mut app| async move {
         initialize_settings_for_tests(&mut app);
 
         TabSettings::handle(&app).read(&app, |settings, _ctx| {
-            assert!(*settings.show_puente_status_chip);
+            assert!(!*settings.show_puente_status_chip);
         });
     });
 }
