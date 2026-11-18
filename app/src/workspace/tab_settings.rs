@@ -733,7 +733,7 @@ define_settings_group!(TabSettings, settings: [
     },
     puente_status_script: PuenteStatusScript {
         type: String,
-        default: "/Users/franklrodriguez/RiderProjects/puente/bin/puente-list-json.sh".to_string(),
+        default: String::new(),
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
         surface: settings::SettingSurfaces::GUI,
