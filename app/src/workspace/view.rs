@@ -154,7 +154,6 @@ use super::lightbox_view::{LightboxParams, LightboxView, LightboxViewEvent};
 use super::native_modal::{NativeModal, NativeModalEvent};
 use super::one_time_modal_model::OneTimeModalEvent;
 use super::puente_status::{self, PuenteStatus};
-use super::warposs_update::{self, AvailableUpdate};
 use super::rewind_confirmation_dialog::{
     RewindConfirmationDialog, RewindConfirmationEvent, RewindDialogSource,
 };
@@ -166,6 +165,7 @@ use super::util::{
     PaneViewLocator, TabMovement, TerminalSessionFallbackBehavior, WelcomeTipsViewState,
     WorkspaceMouseStates, WorkspaceState, team_switcher_menu_items,
 };
+use super::warposs_update::{self, AvailableUpdate};
 use super::{
     ActiveSession, TabBarDropTargetData, TabBarLocation, WorkspaceRegistry, claude_tabs, util,
 };
@@ -21656,7 +21656,9 @@ impl Workspace {
                 UserNotification::new_with_sound(title, body, None, play_sound)
                     .with_show_while_app_active(true),
                 |_, notification_error, _| {
-                    log::warn!("No se pudo enviar el aviso de cupo del plan: {notification_error:?}");
+                    log::warn!(
+                        "No se pudo enviar el aviso de cupo del plan: {notification_error:?}"
+                    );
                 },
             );
         }
