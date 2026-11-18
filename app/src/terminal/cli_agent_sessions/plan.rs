@@ -81,8 +81,9 @@ fn tier_name(organization_type: Option<&str>, rate_limit_tier: Option<&str>) -> 
     };
     let multiplier = rate_limit_tier.and_then(|tier| {
         tier.rsplit('_').find(|part| {
-            part.strip_suffix('x')
-                .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+            part.strip_suffix('x').is_some_and(|digits| {
+                !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+            })
         })
     });
     Some(match multiplier {

@@ -53,7 +53,9 @@ fn parse_plan_is_none_without_a_subscription() {
     assert_eq!(parse_plan(&json!({})), None);
     assert_eq!(parse_plan(&json!({ "oauthAccount": {} })), None);
     assert_eq!(
-        parse_plan(&json!({ "oauthAccount": { "organizationType": "api", "planDisplayName": "  " } })),
+        parse_plan(
+            &json!({ "oauthAccount": { "organizationType": "api", "planDisplayName": "  " } })
+        ),
         None
     );
 }

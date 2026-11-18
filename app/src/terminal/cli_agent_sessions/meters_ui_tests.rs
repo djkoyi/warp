@@ -2,6 +2,7 @@ use super::*;
 use crate::terminal::cli_agent_sessions::meters::{
     CompactTrigger, CompactionState, GlobalMeters, RateLimitWindow,
 };
+use crate::terminal::cli_agent_sessions::plan::ClaudePlan;
 
 fn texts(segments: &[MeterSegment]) -> Vec<&str> {
     segments.iter().map(|s| s.text.as_str()).collect()
@@ -76,9 +77,8 @@ fn strip_segments_cover_all_meters() {
             "ctx 92% of 200k (8% left)",
             "compaction imminent",
             "session in 1.5M / out 42k",
-            "$3.50",
-            "5h 23% (resets 2h13m)",
-            "7d 96%",
+            "sesión 23% (se reinicia en 2h13m)",
+            "semana 96%",
         ]
     );
     let seven_day = segments.last().unwrap();
@@ -114,8 +114,15 @@ fn strip_segments_show_compaction_in_progress() {
     );
 }
 
+fn ultra_plan() -> ClaudePlan {
+    ClaudePlan {
+        name: "Ultra".to_owned(),
+        tier: Some("Max 20x".to_owned()),
+    }
+}
+
 #[test]
-fn global_chip_segments_show_only_plan_usage_without_cost() {
+fn global_chip_segments_show_plan_name_and_usage_without_cost() {
     let global = GlobalMeters {
         five_hour: Some(RateLimitWindow {
             used_pct: 42.,
@@ -127,10 +134,22 @@ fn global_chip_segments_show_only_plan_usage_without_cost() {
         }),
         cost_usd: Some(12.34),
     };
-    let segments = global_chip_segments(&global);
-    assert_eq!(texts(&segments), vec!["5h 42%", "7d 96%"]);
-    assert_eq!(segments[0].tone, MeterTone::Normal);
-    assert_eq!(segments[1].tone, MeterTone::Danger);
+    let segments = global_chip_segments(Some(&ultra_plan()), Some(&global));
+    assert_eq!(
+        texts(&segments),
+        vec!["Plan Ultra", "Sesión 42%", "Semana 96%"]
+    );
+    assert_eq!(segments[0].tone, MeterTone::Accent);
+    assert_eq!(segments[1].tone, MeterTone::Normal);
+    assert_eq!(segments[2].tone, MeterTone::Danger);
+}
+
+#[test]
+fn global_chip_segments_show_the_plan_before_any_usage_arrives() {
+    assert_eq!(
+        texts(&global_chip_segments(Some(&ultra_plan()), None)),
+        vec!["Plan Ultra"]
+    );
 }
 
 #[test]
@@ -143,8 +162,8 @@ fn global_chip_segments_skip_missing_window() {
         ..Default::default()
     };
     assert_eq!(
-        texts(&global_chip_segments(&only_five_hour)),
-        vec!["5h 10%"]
+        texts(&global_chip_segments(None, Some(&only_five_hour))),
+        vec!["Sesión 10%"]
     );
 
     let only_seven_day = GlobalMeters {
@@ -155,18 +174,64 @@ fn global_chip_segments_skip_missing_window() {
         ..Default::default()
     };
     assert_eq!(
-        texts(&global_chip_segments(&only_seven_day)),
-        vec!["7d 88%"]
+        texts(&global_chip_segments(None, Some(&only_seven_day))),
+        vec!["Semana 88%"]
     );
 }
 
 #[test]
-fn global_chip_segments_empty_when_no_window_even_with_cost() {
+fn global_chip_segments_empty_without_plan_or_window_even_with_cost() {
     let cost_only = GlobalMeters {
         five_hour: None,
         seven_day: None,
         cost_usd: Some(5.),
     };
-    assert!(global_chip_segments(&cost_only).is_empty());
-    assert!(global_chip_segments(&GlobalMeters::default()).is_empty());
+    assert!(global_chip_segments(None, Some(&cost_only)).is_empty());
+    assert!(global_chip_segments(None, Some(&GlobalMeters::default())).is_empty());
+    assert!(global_chip_segments(None, None).is_empty());
+}
+
+#[test]
+fn global_usage_rows_describe_each_limit_and_its_reset() {
+    let now = 10_000;
+    let global = GlobalMeters {
+        five_hour: Some(RateLimitWindow {
+            used_pct: 42.,
+            resets_at: Some(now + 2 * 3_600 + 13 * 60),
+        }),
+        seven_day: Some(RateLimitWindow {
+            used_pct: 96.,
+            resets_at: None,
+        }),
+        cost_usd: None,
+    };
+    let rows = global_usage_rows(Some(&global), now);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].title, "Sesión actual (5 horas)");
+    assert_eq!(rows[0].detail, "42% usado · se reinicia en 2 h 13 min");
+    assert_eq!(rows[0].tone, MeterTone::Normal);
+    assert_eq!(rows[1].title, "Semana (todos los modelos)");
+    assert_eq!(rows[1].detail, "96% usado");
+    assert_eq!(rows[1].tone, MeterTone::Danger);
+    assert!(global_usage_rows(None, now).is_empty());
+}
+
+#[test]
+fn format_reset_when_uses_a_countdown_within_a_day_and_a_date_beyond() {
+    let now = 1_000_000;
+    assert_eq!(
+        format_reset_when(now + 45 * 60, now).as_deref(),
+        Some("en 45 min")
+    );
+    assert_eq!(format_reset_when(now - 1, now), None);
+    let far = format_reset_when(now + 3 * 86_400, now).unwrap();
+    assert!(far.starts_with("el "), "{far}");
+}
+
+#[test]
+fn format_spanish_date_is_short_and_in_spanish() {
+    use chrono::{TimeZone, Utc};
+    // 2026-11-26 is a Thursday.
+    let at = Utc.with_ymd_and_hms(2026, 11, 26, 9, 5, 0).unwrap();
+    assert_eq!(format_spanish_date(&at), "jue 26 nov, 9:05");
 }

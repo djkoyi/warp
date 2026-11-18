@@ -60,8 +60,9 @@ impl ClaudeTabField {
 
     pub fn default_enabled(self) -> bool {
         match self {
-            Self::Model | Self::Context | Self::Cost | Self::Status => true,
-            Self::Tokens | Self::RateLimits | Self::Lines => false,
+            // Plan limits instead of cost: on a subscription the cost is only a reference.
+            Self::Model | Self::Context | Self::RateLimits | Self::Status => true,
+            Self::Tokens | Self::Cost | Self::Lines => false,
         }
     }
 }

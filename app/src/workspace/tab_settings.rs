@@ -673,7 +673,7 @@ define_settings_group!(TabSettings, settings: [
     },
     vertical_tabs_claude_show_cost: VerticalTabsClaudeShowCost {
         type: bool,
-        default: true,
+        default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
         surface: settings::SettingSurfaces::GUI,
@@ -683,7 +683,7 @@ define_settings_group!(TabSettings, settings: [
     },
     vertical_tabs_claude_show_rate_limits: VerticalTabsClaudeShowRateLimits {
         type: bool,
-        default: false,
+        default: true,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
         surface: settings::SettingSurfaces::GUI,
@@ -719,7 +719,7 @@ define_settings_group!(TabSettings, settings: [
         surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "claude.show_account_usage_chip",
-        description: "Whether to show the account usage chip (5-hour and 7-day plan limits) in the top bar.",
+        description: "Whether to show the plan chip (subscription plan name and its session and weekly limits) in the top bar.",
     },
     show_puente_status_chip: ShowPuenteStatusChip {
         type: bool,

@@ -3844,10 +3844,10 @@ impl Workspace {
             let global_segments = if meters_ui::meters_enabled(ctx)
                 && *TabSettings::as_ref(ctx).show_account_usage_chip
             {
-                CLIAgentSessionsModel::as_ref(ctx)
-                    .global_meters()
-                    .map(|global| meters_ui::global_chip_segments(&global))
-                    .unwrap_or_default()
+                meters_ui::global_chip_segments(
+                    crate::terminal::cli_agent_sessions::plan::current_plan().as_ref(),
+                    CLIAgentSessionsModel::as_ref(ctx).global_meters().as_ref(),
+                )
             } else {
                 Vec::new()
             };
@@ -21584,10 +21584,12 @@ impl Workspace {
         )
     }
 
-    /// Renders the global account-usage chip shown in the top bar beside the search: the account
-    /// 5h and 7d rate-limit usage and the accumulated cost across every live Claude session. Hover
-    /// reveals a tooltip with each limit's reset countdown. Returns `None` (chip hidden) when the
-    /// meters are disabled or no live session has reported usage yet.
+    /// Renders the global plan chip shown in the top bar beside the search: the name of the Claude
+    /// subscription plan and the usage of its session (5h) and weekly (7d) limits. Hover reveals the
+    /// plan usage panel, with a bar per limit and when each one resets. The plan name comes from
+    /// Claude Code's own account file, so the chip shows even before any session reports usage.
+    /// Returns `None` (chip hidden) when the meters are disabled or neither the plan nor any usage
+    /// is known.
     fn render_global_usage_chip(
         &self,
         appearance: &Appearance,
@@ -21596,8 +21598,9 @@ impl Workspace {
         if !meters_ui::meters_enabled(ctx) || !*TabSettings::as_ref(ctx).show_account_usage_chip {
             return None;
         }
-        let global = CLIAgentSessionsModel::as_ref(ctx).global_meters()?;
-        let segments = meters_ui::global_chip_segments(&global);
+        let plan = crate::terminal::cli_agent_sessions::plan::current_plan();
+        let global = CLIAgentSessionsModel::as_ref(ctx).global_meters();
+        let segments = meters_ui::global_chip_segments(plan.as_ref(), global.as_ref());
         if segments.is_empty() {
             return None;
         }
@@ -21605,29 +21608,11 @@ impl Workspace {
         let theme = appearance.theme();
         let label = meters_ui::render_inline_segments(&segments, 12., appearance);
 
-        let tooltip_lines = meters_ui::global_chip_tooltip_lines(&global, now_epoch_secs());
+        let usage_rows = meters_ui::global_usage_rows(global.as_ref(), now_epoch_secs());
+        let panel_colors = meters_ui::UsagePanelColors::for_tooltip(appearance);
         let ui_font_family = appearance.ui_font_family();
-        let tooltip_bg = theme.tooltip_background();
-        let tooltip_fg = theme.background().into_solid();
-        let tooltip_outline = theme.outline();
         let render_tooltip = move || -> Box<dyn Element> {
-            let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Start);
-            for line in tooltip_lines {
-                column.add_child(
-                    Text::new_inline(line, ui_font_family, 10.)
-                        .with_color(tooltip_fg)
-                        .finish(),
-                );
-            }
-            Container::new(column.finish())
-                .with_background_color(tooltip_bg)
-                .with_border(Border::all(1.).with_border_fill(tooltip_outline))
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
-                .with_padding_left(8.)
-                .with_padding_right(8.)
-                .with_padding_top(4.)
-                .with_padding_bottom(4.)
-                .finish()
+            meters_ui::render_usage_panel(plan.as_ref(), &usage_rows, panel_colors, ui_font_family)
         };
 
         let default_styles = UiComponentStyles {

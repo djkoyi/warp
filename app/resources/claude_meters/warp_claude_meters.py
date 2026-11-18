@@ -382,9 +382,11 @@ def default_status_line(data):
     used = (data.get("context_window") or {}).get("used_percentage")
     if isinstance(used, (int, float)):
         parts.append("ctx %d%%" % round(used))
-    cost = (data.get("cost") or {}).get("total_cost_usd")
-    if isinstance(cost, (int, float)):
-        parts.append("$%.2f" % cost)
+    limits = data.get("rate_limits") or {}
+    for label, window in (("sesión", "five_hour"), ("semana", "seven_day")):
+        pct = (limits.get(window) or {}).get("used_percentage")
+        if isinstance(pct, (int, float)):
+            parts.append("%s %d%%" % (label, round(pct)))
     return re.sub(r"[\x00-\x1f\x7f-\x9f]", "", " · ".join(parts))
 
 

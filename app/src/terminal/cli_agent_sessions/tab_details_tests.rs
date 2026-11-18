@@ -130,7 +130,7 @@ fn tab_row_shows_default_fields() {
     );
     assert_eq!(
         row_texts(&row),
-        vec!["Opus 5.5", "ctx 32 %", "$1,20", "Trabajando"]
+        vec!["Opus 5.5", "ctx 32 %", "5 h 40 %", "7 d 12 %", "Trabajando"]
     );
 }
 
