@@ -94,3 +94,42 @@ fn puente_acepta_las_claves_en_minusculas_de_puentectl() {
         vec!["786123 - nb1-denit (Microsoft Windows 11) [en uso]".to_string()]
     );
 }
+
+#[test]
+fn puente_codigo_valido_solo_admite_caracteres_seguros() {
+    assert!(is_valid_code("786123"));
+    assert!(is_valid_code("nb1-denit_2"));
+    for code in ["", "12 34", "1;rm -rf", "$(id)", "a'b", "../x"] {
+        assert!(!is_valid_code(code), "{code}");
+    }
+    assert!(!is_valid_code(&"9".repeat(65)));
+}
+
+#[test]
+fn puente_comando_de_conexion_cita_la_ruta_y_rechaza_codigos_raros() {
+    let script = Path::new("/Users/yo/Mis Proyectos/puente/bin/puente-ssh.sh");
+    assert_eq!(
+        connect_command(script, "786123").as_deref(),
+        Some("'/Users/yo/Mis Proyectos/puente/bin/puente-ssh.sh' 786123")
+    );
+    assert_eq!(
+        connect_command(Path::new("/a/it's/puente-ssh.sh"), "1").as_deref(),
+        Some(r"'/a/it'\''s/puente-ssh.sh' 1")
+    );
+    assert_eq!(connect_command(script, "1; id"), None);
+}
+
+#[test]
+fn puente_nombre_de_equipo_para_el_menu() {
+    let status = parse_puente_output(br#"[{"code":"786123","host":"nb1-denit"},{"code":"55"}]"#);
+    let names: Vec<String> = status
+        .equipos()
+        .iter()
+        .map(PuenteEquipo::display_name)
+        .collect();
+    assert_eq!(
+        names,
+        vec!["nb1-denit · 786123".to_string(), "55".to_string()]
+    );
+    assert!(PuenteStatus::Unavailable.equipos().is_empty());
+}

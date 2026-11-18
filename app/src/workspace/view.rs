@@ -153,7 +153,7 @@ use super::hoa_onboarding::{
 use super::lightbox_view::{LightboxParams, LightboxView, LightboxViewEvent};
 use super::native_modal::{NativeModal, NativeModalEvent};
 use super::one_time_modal_model::OneTimeModalEvent;
-use super::puente_status::{self, PuenteStatus};
+use super::puente_status::{self, PuenteStatus, PuenteTarget};
 use super::rewind_confirmation_dialog::{
     RewindConfirmationDialog, RewindConfirmationEvent, RewindDialogSource,
 };
@@ -21536,6 +21536,104 @@ impl Workspace {
         )
     }
 
+    /// Opens, below the top-bar controls, the menu that lists every puente equipo with one entry
+    /// per way of connecting to it; closes it if it is already open.
+    fn toggle_puente_menu(&mut self, ctx: &mut ViewContext<Self>) {
+        self.is_user_menu_open = !self.is_user_menu_open;
+        if self.is_user_menu_open {
+            let items = self.puente_menu_items();
+            self.user_menu.update(ctx, |menu, ctx| {
+                menu.set_items(items, ctx);
+            });
+        }
+        ctx.focus(&self.user_menu);
+        ctx.notify();
+    }
+
+    fn puente_menu_items(&self) -> Vec<MenuItem<WorkspaceAction>> {
+        let equipos = self.puente_status.equipos();
+        if equipos.is_empty() {
+            return vec![
+                MenuItemFields::new("Puente: sin equipos conectados")
+                    .with_disabled(true)
+                    .into_item(),
+            ];
+        }
+        let mut items = Vec::new();
+        for (index, equipo) in equipos.iter().enumerate() {
+            if index > 0 {
+                items.push(MenuItem::Separator);
+            }
+            let estado = if equipo.in_use { "en uso" } else { "libre" };
+            let sistema = if equipo.os_name.is_empty() {
+                String::new()
+            } else {
+                format!(" · {}", equipo.os_name)
+            };
+            items.push(
+                MenuItemFields::new(format!("{}{sistema} ({estado})", equipo.display_name()))
+                    .with_disabled(true)
+                    .into_item(),
+            );
+            for target in [PuenteTarget::Terminal, PuenteTarget::Escritorio] {
+                let mut item = MenuItemFields::new(format!("    {}", target.label()));
+                if puente_status::is_valid_code(&equipo.code) {
+                    item = item.with_on_select_action(WorkspaceAction::PuenteConnect {
+                        code: equipo.code.clone(),
+                        target,
+                    });
+                } else {
+                    item = item.with_disabled(true);
+                }
+                items.push(item.into_item());
+            }
+        }
+        items
+    }
+
+    /// Connects to the puente equipo `code` with the script that sits next to the configured list
+    /// script: a terminal opens in a new tab, a remote desktop opens in the system RDP client.
+    fn puente_connect(&mut self, code: &str, target: PuenteTarget, ctx: &mut ViewContext<Self>) {
+        let list_script = PathBuf::from(TabSettings::as_ref(ctx).puente_status_script.value());
+        let Some(script) = puente_status::connect_script(&list_script, target) else {
+            log::warn!(
+                "Puente: no existe el script para {} junto al de estado",
+                target.label()
+            );
+            return;
+        };
+        match target {
+            PuenteTarget::Terminal => {
+                let Some(command) = puente_status::connect_command(&script, code) else {
+                    return;
+                };
+                self.add_tab_with_pane_layout(
+                    PanesLayout::Template(claude_tabs::claude_pane_template(
+                        PathBuf::new(),
+                        &command,
+                    )),
+                    Arc::new(HashMap::new()),
+                    None,
+                    ctx,
+                );
+            }
+            PuenteTarget::Escritorio => {
+                if !puente_status::is_valid_code(code) {
+                    return;
+                }
+                if let Err(err) = std::process::Command::new(&script)
+                    .arg(code)
+                    .stdin(std::process::Stdio::null())
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .spawn()
+                {
+                    log::warn!("Puente: no se pudo abrir el escritorio remoto: {err}");
+                }
+            }
+        }
+    }
+
     /// Renders the puente broker status chip shown in the top bar beside the account-usage chip:
     /// the number of connected machines and how many are in use, with a tooltip listing them.
     /// Green when at least one machine is connected, dimmed for "sin equipos" / "sin conexión".
@@ -21620,9 +21718,11 @@ impl Workspace {
             None,
         )
         .with_custom_label(label)
-        .with_cursor(None)
         .with_tooltip(render_tooltip)
         .build()
+        .on_click(|ctx, _, _| {
+            ctx.dispatch_typed_action(WorkspaceAction::TogglePuenteMenu);
+        })
         .finish();
 
         Some(
@@ -25929,6 +26029,8 @@ impl TypedActionView for Workspace {
                 });
                 ctx.notify();
             }
+            TogglePuenteMenu => self.toggle_puente_menu(ctx),
+            PuenteConnect { code, target } => self.puente_connect(code, *target, ctx),
             ToggleShowPuenteStatusChip => {
                 TabSettings::handle(ctx).update(ctx, |settings, ctx| {
                     let new_value = !*settings.show_puente_status_chip.value();

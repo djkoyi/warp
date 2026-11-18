@@ -4,7 +4,7 @@
 //! rapido cuando el broker no responde. Aqui solo se ejecuta y se interpreta su salida; el token y
 //! el control los resuelve el propio script.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -19,6 +19,61 @@ pub const PUENTE_HARD_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Maximo de equipos listados en el tooltip antes de resumir el resto con "(+K mas)".
 const MAX_TOOLTIP_EQUIPOS: usize = 6;
+
+/// Largo maximo de un codigo de equipo aceptado para conectar.
+const MAX_CODE_CHARS: usize = 64;
+
+/// Forma de entrar a un equipo del puente.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PuenteTarget {
+    /// Consola remota en una pestaña nueva.
+    Terminal,
+    /// Escritorio remoto con el cliente RDP del sistema.
+    Escritorio,
+}
+
+impl PuenteTarget {
+    /// Script, vecino del que lista los equipos, que abre este tipo de conexion por codigo.
+    fn script_name(self) -> &'static str {
+        match self {
+            Self::Terminal => "puente-ssh.sh",
+            Self::Escritorio => "puente-rdp.sh",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Terminal => "Terminal",
+            Self::Escritorio => "Escritorio remoto",
+        }
+    }
+}
+
+/// Un codigo de equipo es seguro para pasarlo a un script: solo letras, digitos, `-` y `_`.
+pub fn is_valid_code(code: &str) -> bool {
+    !code.is_empty()
+        && code.chars().count() <= MAX_CODE_CHARS
+        && code
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
+}
+
+/// Ruta del script de conexion para `target`, junto al script que lista los equipos. `None` si no
+/// existe.
+pub fn connect_script(list_script: &Path, target: PuenteTarget) -> Option<PathBuf> {
+    let script = list_script.parent()?.join(target.script_name());
+    script.is_file().then_some(script)
+}
+
+/// Linea de comandos para ejecutar `script` con `code` en una shell POSIX. `None` si el codigo no
+/// es valido.
+pub fn connect_command(script: &Path, code: &str) -> Option<String> {
+    if !is_valid_code(code) {
+        return None;
+    }
+    let quoted = script.to_string_lossy().replace('\'', r"'\''");
+    Some(format!("'{quoted}' {code}"))
+}
 
 /// Un equipo conectado al broker, tal como lo reporta el script.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -49,7 +104,26 @@ impl Default for PuenteStatus {
     }
 }
 
+impl PuenteEquipo {
+    /// Nombre para listas: `nb1-denit · 786123`, o solo el codigo si no reporta nombre.
+    pub fn display_name(&self) -> String {
+        if self.host.is_empty() {
+            self.code.clone()
+        } else {
+            format!("{} · {}", self.host, self.code)
+        }
+    }
+}
+
 impl PuenteStatus {
+    /// Equipos conectados; vacio si el broker no respondio.
+    pub fn equipos(&self) -> &[PuenteEquipo] {
+        match self {
+            PuenteStatus::Ok(equipos) => equipos,
+            PuenteStatus::Unavailable => &[],
+        }
+    }
+
     /// Cantidad de equipos conectados (0 cuando no hay conexion).
     pub fn equipos_count(&self) -> usize {
         match self {

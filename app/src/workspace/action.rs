@@ -412,6 +412,13 @@ pub enum WorkspaceAction {
     ToggleShowAccountUsageChip,
     /// Toggles the puente broker status chip in the top bar.
     ToggleShowPuenteStatusChip,
+    /// Opens or closes the menu that lists the puente equipos with their connect options.
+    TogglePuenteMenu,
+    /// Connects to a puente equipo by code.
+    PuenteConnect {
+        code: String,
+        target: crate::workspace::puente_status::PuenteTarget,
+    },
     /// Closes the focused panel. This happens as an explicit action from the user.
     ClosePanel,
     CopyTextToClipboard(String),
@@ -1149,6 +1156,8 @@ impl WorkspaceAction {
             | ToggleVerticalTabsClaudeField(_)
             | ToggleShowAccountUsageChip
             | ToggleShowPuenteStatusChip
+            | TogglePuenteMenu
+            | PuenteConnect { .. }
             | ToggleWelcomeTips
             | CopyTextToClipboard(_)
             | CopyCurrentPath
