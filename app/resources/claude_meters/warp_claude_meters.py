@@ -155,11 +155,23 @@ def write_tty(sequence):
 TERMINAL_SEQUENCE_MIN_VERSION = (2, 1, 141)
 
 
+def claude_code_version():
+    """Version of the Claude Code running this hook, or None when it does not say. Claude Code
+    does not always export CLAUDE_CODE_VERSION to hooks, so the path of its executable
+    (`.../versions/2.1.327`) is tried as well."""
+    for name in ("CLAUDE_CODE_VERSION", "CLAUDE_CODE_EXECPATH"):
+        match = re.search(r"(\d+)\.(\d+)\.(\d+)", os.environ.get(name) or "")
+        if match:
+            return tuple(int(part) for part in match.groups())
+    return None
+
+
 def supports_terminal_sequence():
-    match = re.search(r"(\d+)\.(\d+)\.(\d+)", os.environ.get("CLAUDE_CODE_VERSION") or "")
-    if not match:
-        return False
-    return tuple(int(part) for part in match.groups()) >= TERMINAL_SEQUENCE_MIN_VERSION
+    """Whether hooks can hand sequences back as `terminalSequence`. An unknown version counts as
+    supported: every Claude Code recent enough to hide the terminal from hooks understands it, and
+    assuming otherwise silently drops every meter."""
+    version = claude_code_version()
+    return version is None or version >= TERMINAL_SEQUENCE_MIN_VERSION
 
 
 def park_sequence(session_id, sequence):
