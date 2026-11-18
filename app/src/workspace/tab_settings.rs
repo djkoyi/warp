@@ -723,7 +723,7 @@ define_settings_group!(TabSettings, settings: [
     },
     show_puente_status_chip: ShowPuenteStatusChip {
         type: bool,
-        default: true,
+        default: false,
         supported_platforms: SupportedPlatforms::ALL,
         sync_to_cloud: SyncToCloud::Never,
         surface: settings::SettingSurfaces::GUI,
