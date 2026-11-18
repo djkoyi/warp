@@ -46,6 +46,7 @@ pub(super) struct WorkspaceMouseStates {
     pub(super) title_bar_search_bar: MouseStateHandle,
     pub(super) global_usage_chip: MouseStateHandle,
     pub(super) puente_status_chip: MouseStateHandle,
+    pub(super) warposs_update_chip: MouseStateHandle,
     pub(super) team_switcher_pill: MouseStateHandle,
     #[cfg(target_family = "wasm")]
     pub(super) warp_logo: MouseStateHandle,

@@ -19,6 +19,7 @@ mod lightbox_view;
 mod native_modal;
 mod one_time_modal_model;
 pub(crate) mod puente_status;
+pub(crate) mod warposs_update;
 mod registry;
 pub mod rewind_confirmation_dialog;
 pub mod sync_inputs;

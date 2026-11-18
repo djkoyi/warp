@@ -154,6 +154,7 @@ use super::lightbox_view::{LightboxParams, LightboxView, LightboxViewEvent};
 use super::native_modal::{NativeModal, NativeModalEvent};
 use super::one_time_modal_model::OneTimeModalEvent;
 use super::puente_status::{self, PuenteStatus};
+use super::warposs_update::{self, AvailableUpdate};
 use super::rewind_confirmation_dialog::{
     RewindConfirmationDialog, RewindConfirmationEvent, RewindDialogSource,
 };
@@ -1184,6 +1185,8 @@ pub struct Workspace {
     /// Bumped whenever the puente poller is (re)started or stopped; an in-flight poll whose
     /// generation no longer matches drops its result and does not reschedule itself.
     puente_poll_generation: u64,
+    /// A published WarpOss version newer than this build, shown by the top-bar update chip.
+    warposs_update: Option<AvailableUpdate>,
     cloud_agent_capacity_modal: ViewHandle<CloudAgentCapacityModal>,
     free_ai_removal_modal: ViewHandle<FreeAiRemovalModal>,
     /// Second instance of the free-AI-removal modal, opened on demand when a
@@ -3615,6 +3618,7 @@ impl Workspace {
             rendered_global_meter_segments: Vec::new(),
             puente_status: PuenteStatus::default(),
             puente_poll_generation: 0,
+            warposs_update: None,
             cloud_agent_capacity_modal,
             free_ai_removal_modal,
             prompt_suggestions_unavailable_modal,
@@ -3650,6 +3654,7 @@ impl Workspace {
         // pushed by `subscribe_to_settings_errors` and `dismiss_workspace_banner`.
         ws.sync_settings_error_state_into_settings_pane(ctx);
         ws.restart_puente_poller(ctx);
+        ws.schedule_warposs_update_check(true, ctx);
 
         let weak_handle = ctx.handle();
         WorkspaceRegistry::handle(ctx).update(ctx, |registry, _| {
@@ -21432,6 +21437,105 @@ impl Workspace {
         );
     }
 
+    /// Asks the published manifest whether a newer WarpOss exists, off the UI thread, and keeps
+    /// asking every [`warposs_update::CHECK_INTERVAL`] while the window lives. The app never
+    /// updates itself: the result only drives the update chip.
+    fn schedule_warposs_update_check(&self, immediate: bool, ctx: &mut ViewContext<Self>) {
+        ctx.spawn(
+            async move {
+                if !immediate {
+                    tokio::time::sleep(warposs_update::CHECK_INTERVAL).await;
+                }
+                warposs_update::check_for_update().await
+            },
+            |me, update, ctx| {
+                if me.warposs_update != update {
+                    me.warposs_update = update;
+                    ctx.notify();
+                }
+                me.schedule_warposs_update_check(false, ctx);
+            },
+        );
+    }
+
+    /// Renders the chip that announces a newer published WarpOss version. Clicking it opens the
+    /// download page. Returns `None` (chip hidden) while this build is up to date or the manifest
+    /// could not be read.
+    fn render_warposs_update_chip(&self, appearance: &Appearance) -> Option<Box<dyn Element>> {
+        let update = self.warposs_update.as_ref()?;
+        let theme = appearance.theme();
+        let ui_font_family = appearance.ui_font_family();
+
+        let label = Text::new_inline(update.label(), ui_font_family, 12.)
+            .with_color(theme.accent().into_solid())
+            .with_style(Properties::default().weight(Weight::Semibold))
+            .finish();
+
+        let tooltip_lines = update.tooltip_lines(warposs_update::current_version());
+        let tooltip_bg = theme.tooltip_background();
+        let tooltip_fg = theme.background().into_solid();
+        let tooltip_outline = theme.outline();
+        let render_tooltip = move || -> Box<dyn Element> {
+            let mut column = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Start);
+            for line in tooltip_lines {
+                column.add_child(
+                    Text::new_inline(line, ui_font_family, 10.)
+                        .with_color(tooltip_fg)
+                        .finish(),
+                );
+            }
+            Container::new(column.finish())
+                .with_background_color(tooltip_bg)
+                .with_border(Border::all(1.).with_border_fill(tooltip_outline))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+                .with_horizontal_padding(8.)
+                .with_vertical_padding(4.)
+                .finish()
+        };
+
+        let default_styles = UiComponentStyles {
+            font_size: Some(12.),
+            font_family_id: Some(ui_font_family),
+            height: Some(24.),
+            background: Some(internal_colors::fg_overlay_1(theme).into()),
+            border_radius: Some(CornerRadius::with_all(Radius::Pixels(4.))),
+            border_width: Some(0.),
+            padding: Some(Coords {
+                top: 0.,
+                bottom: 0.,
+                left: 8.,
+                right: 8.,
+            }),
+            ..Default::default()
+        };
+        let hover_styles = UiComponentStyles {
+            background: Some(internal_colors::fg_overlay_2(theme).into()),
+            ..default_styles
+        };
+
+        let page_url = update.page_url.clone();
+        let chip = Button::new(
+            self.mouse_states.warposs_update_chip.clone(),
+            default_styles,
+            Some(hover_styles),
+            None,
+            None,
+        )
+        .with_custom_label(label)
+        .with_tooltip(render_tooltip)
+        .build()
+        .on_click(move |ctx, _, _| {
+            ctx.dispatch_typed_action(WorkspaceAction::OpenLink(page_url.clone()));
+        })
+        .finish();
+
+        Some(
+            Container::new(chip)
+                .with_margin_left(TAB_BAR_PADDING_LEFT)
+                .finish(),
+        )
+    }
+
     /// Renders the puente broker status chip shown in the top bar beside the account-usage chip:
     /// the number of connected machines and how many are in use, with a tooltip listing them.
     /// Green when at least one machine is connected, dimmed for "sin equipos" / "sin conexión".
@@ -22150,6 +22254,10 @@ impl Workspace {
         appearance: &Appearance,
         ctx: &AppContext,
     ) {
+        if let Some(chip) = self.render_warposs_update_chip(appearance) {
+            target.add_child(chip);
+        }
+
         if let Some(chip) = self.render_global_usage_chip(appearance, ctx) {
             target.add_child(chip);
         }
