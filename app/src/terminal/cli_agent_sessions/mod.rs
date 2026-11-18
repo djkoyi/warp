@@ -5,6 +5,7 @@ pub mod meters;
 pub mod meters_bridge;
 pub mod meters_ui;
 pub mod plan;
+pub mod quota;
 pub mod tab_details;
 #[cfg(not(target_family = "wasm"))]
 pub(crate) mod plugin_manager;
@@ -418,6 +419,8 @@ pub struct CLIAgentSessionsModel {
     /// Usage meters per terminal view. Kept outside [`CLIAgentSession`] because they are fed by
     /// the optional meters bridge rather than by the session lifecycle.
     meters: HashMap<EntityId, CLIAgentMeters>,
+    /// Which plan-limit thresholds were already announced. See [`Self::take_quota_alerts`].
+    quota_alerts: quota::QuotaAlertState,
     /// Tracks (agent, remote_host) pairs where an auto plugin operation (install or update) has failed.
     /// Shared across all views so failure in one tab is reflected everywhere.
     plugin_auto_failures: HashSet<(CLIAgent, Option<String>)>,
@@ -441,6 +444,7 @@ impl CLIAgentSessionsModel {
         Self {
             sessions: HashMap::new(),
             meters: HashMap::new(),
+            quota_alerts: quota::QuotaAlertState::default(),
             plugin_auto_failures: HashSet::new(),
             ctrl_c_cancel_state: HashMap::new(),
             next_ctrl_c_token: 0,
@@ -498,6 +502,13 @@ impl CLIAgentSessionsModel {
     /// so this never reports a session that has ended. Takes no terminal-model lock.
     pub fn global_meters(&self) -> Option<meters::GlobalMeters> {
         meters::aggregate_global_meters(self.meters.values().filter_map(|m| m.snapshot.as_ref()))
+    }
+
+    /// The plan limits that just crossed a threshold and have not been announced yet. Each one is
+    /// handed out once, so with several windows open only the first caller notifies.
+    pub fn take_quota_alerts(&mut self, now: i64) -> Vec<quota::QuotaAlert> {
+        let global = self.global_meters();
+        self.quota_alerts.update(global.as_ref(), now)
     }
 
     /// Returns `true` if the rich input editor is currently open for this terminal.

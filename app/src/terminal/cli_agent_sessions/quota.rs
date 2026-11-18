@@ -57,11 +57,7 @@ impl QuotaLevel {
 /// Seconds from `now` until the window is exhausted at the average pace since it started, when
 /// that happens before the window resets. `None` when the pace is sustainable, the window is
 /// already exhausted or expired, or it is too early in the window to tell.
-pub fn seconds_to_exhaustion(
-    window: RateLimitWindow,
-    kind: QuotaWindow,
-    now: i64,
-) -> Option<i64> {
+pub fn seconds_to_exhaustion(window: RateLimitWindow, kind: QuotaWindow, now: i64) -> Option<i64> {
     let resets_at = window.resets_at?;
     let duration = kind.duration_secs();
     let elapsed = now.checked_sub(resets_at.checked_sub(duration)?)?;

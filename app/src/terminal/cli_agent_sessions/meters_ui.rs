@@ -16,16 +16,15 @@ use super::meters::{
     format_window_size, now_epoch_secs,
 };
 use super::plan::ClaudePlan;
+use super::quota::{
+    QUOTA_DANGER_PCT, QUOTA_WARNING_PCT, QuotaAlert, QuotaLevel, QuotaWindow, seconds_to_exhaustion,
+};
 use super::tab_details::format_reset_in as format_reset_in_words;
 use super::{CLIAgentSession, CLIAgentSessionsModel};
 use crate::appearance::Appearance;
 use crate::code::editor::{add_color, remove_color};
 use crate::features::FeatureFlag;
 use crate::settings::AISettings;
-
-/// Plan usage (percent) at which a rate-limit meter turns to a warning color.
-const RATE_LIMIT_WARNING_PCT: f32 = 80.;
-const RATE_LIMIT_DANGER_PCT: f32 = 95.;
 
 /// Below this many seconds to the reset the usage panel shows a countdown; above it, the date.
 const RESET_COUNTDOWN_MAX_SECS: i64 = 24 * 3_600;
@@ -120,9 +119,9 @@ pub fn context_tone(used_pct: f32, threshold: u8) -> MeterTone {
 }
 
 pub(crate) fn rate_limit_tone(used_pct: f32) -> MeterTone {
-    if used_pct >= RATE_LIMIT_DANGER_PCT {
+    if used_pct >= QUOTA_DANGER_PCT {
         MeterTone::Danger
-    } else if used_pct >= RATE_LIMIT_WARNING_PCT {
+    } else if used_pct >= QUOTA_WARNING_PCT {
         MeterTone::Warning
     } else {
         MeterTone::Normal
@@ -167,13 +166,19 @@ pub struct UsageRow {
     pub tone: MeterTone,
     /// E.g. `42% usado · se reinicia en 2 h 13 min`.
     pub detail: String,
+    /// Set when the current pace exhausts the limit before it resets, e.g.
+    /// `Al ritmo actual llegas al tope en 1 h 20 min`.
+    pub pace: Option<String>,
 }
 
 /// The rows of the plan usage panel (Spanish), in the order Claude shows them: current session
 /// first, then the week. A window that has not been reported is skipped.
 pub fn global_usage_rows(global: Option<&GlobalMeters>, now: i64) -> Vec<UsageRow> {
-    let row = |title, window: RateLimitWindow| UsageRow {
+    let row = |title, kind: QuotaWindow, window: RateLimitWindow| UsageRow {
         title,
+        pace: seconds_to_exhaustion(window, kind, now)
+            .and_then(|secs| format_reset_in_words(now.saturating_add(secs), now))
+            .map(|left| format!("Al ritmo actual llegas al tope en {left}")),
         used_pct: window.used_pct.clamp(0., 100.),
         tone: rate_limit_tone(window.used_pct),
         detail: match window
@@ -186,12 +191,39 @@ pub fn global_usage_rows(global: Option<&GlobalMeters>, now: i64) -> Vec<UsageRo
     };
     let mut rows = Vec::new();
     if let Some(window) = global.and_then(|global| global.five_hour) {
-        rows.push(row("Sesión actual (5 horas)", window));
+        rows.push(row("Sesión actual (5 horas)", QuotaWindow::Session, window));
     }
     if let Some(window) = global.and_then(|global| global.seven_day) {
-        rows.push(row("Semana (todos los modelos)", window));
+        rows.push(row("Semana (todos los modelos)", QuotaWindow::Week, window));
     }
     rows
+}
+
+/// Title and body (Spanish) of the desktop notification for a plan limit that crossed a threshold,
+/// e.g. `Plan Ultra: sesión al 82%` / `Queda poco de la sesión actual. Se reinicia en 1 h 5 min.`
+pub fn quota_alert_texts(
+    alert: &QuotaAlert,
+    plan: Option<&ClaudePlan>,
+    now: i64,
+) -> (String, String) {
+    let (short, long) = match alert.window {
+        QuotaWindow::Session => ("sesión", "la sesión actual (5 horas)"),
+        QuotaWindow::Week => ("semana", "la semana"),
+    };
+    let owner = plan.map_or_else(|| "Claude".to_owned(), ClaudePlan::label);
+    let title = format!("{owner}: {short} al {}", format_pct(alert.used_pct));
+    let lead = match alert.level {
+        QuotaLevel::Warning => format!("Queda poco de {long}."),
+        QuotaLevel::Danger => format!("Casi se agota {long}."),
+    };
+    let body = match alert
+        .resets_at
+        .and_then(|resets_at| format_reset_when(resets_at, now))
+    {
+        Some(when) => format!("{lead} Se reinicia {when}."),
+        None => lead,
+    };
+    (title, body)
 }
 
 /// When a limit resets, ready to follow "se reinicia": a countdown within the next day
@@ -237,6 +269,13 @@ pub struct UsagePanelColors {
 }
 
 impl UsagePanelColors {
+    fn tone(&self, tone: MeterTone) -> ColorU {
+        match tone {
+            MeterTone::Danger => self.danger,
+            _ => self.warning,
+        }
+    }
+
     /// Colors for a panel drawn on the theme's tooltip background.
     pub fn for_tooltip(appearance: &Appearance) -> Self {
         let theme = appearance.theme();
@@ -328,6 +367,19 @@ pub fn render_usage_panel(
             .with_margin_top(3.)
             .finish(),
         );
+        if let Some(pace) = &row.pace {
+            // A pace that runs out is at least a warning, whatever the usage so far.
+            column.add_child(
+                Container::new(
+                    Text::new_inline(pace.clone(), family, 10.)
+                        .with_color(colors.tone(row.tone))
+                        .with_style(Properties::default().weight(Weight::Semibold))
+                        .finish(),
+                )
+                .with_margin_top(2.)
+                .finish(),
+            );
+        }
     }
     Container::new(column.finish())
         .with_background_color(colors.background)

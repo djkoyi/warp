@@ -213,7 +213,58 @@ fn global_usage_rows_describe_each_limit_and_its_reset() {
     assert_eq!(rows[1].title, "Semana (todos los modelos)");
     assert_eq!(rows[1].detail, "96% usado");
     assert_eq!(rows[1].tone, MeterTone::Danger);
+    assert_eq!(rows[0].pace, None);
     assert!(global_usage_rows(None, now).is_empty());
+}
+
+#[test]
+fn global_usage_rows_warn_when_the_pace_exhausts_the_session() {
+    let now = 1_000_000;
+    // 2 h into the 5 h window with 60 % used: the rest lasts 80 minutes, the reset is in 3 h.
+    let global = GlobalMeters {
+        five_hour: Some(RateLimitWindow {
+            used_pct: 60.,
+            resets_at: Some(now + 3 * 3_600),
+        }),
+        ..Default::default()
+    };
+    let rows = global_usage_rows(Some(&global), now);
+    assert_eq!(
+        rows[0].pace.as_deref(),
+        Some("Al ritmo actual llegas al tope en 1 h 20 min")
+    );
+}
+
+#[test]
+fn quota_alert_texts_name_the_plan_the_limit_and_the_reset() {
+    use crate::terminal::cli_agent_sessions::quota::{QuotaAlert, QuotaLevel, QuotaWindow};
+    let now = 1_000_000;
+    let warning = QuotaAlert {
+        window: QuotaWindow::Session,
+        level: QuotaLevel::Warning,
+        used_pct: 82.,
+        resets_at: Some(now + 65 * 60),
+    };
+    assert_eq!(
+        quota_alert_texts(&warning, Some(&ultra_plan()), now),
+        (
+            "Plan Ultra: sesión al 82%".to_owned(),
+            "Queda poco de la sesión actual (5 horas). Se reinicia en 1 h 5 min.".to_owned()
+        )
+    );
+    let danger = QuotaAlert {
+        window: QuotaWindow::Week,
+        level: QuotaLevel::Danger,
+        used_pct: 96.,
+        resets_at: None,
+    };
+    assert_eq!(
+        quota_alert_texts(&danger, None, now),
+        (
+            "Claude: semana al 96%".to_owned(),
+            "Casi se agota la semana.".to_owned()
+        )
+    );
 }
 
 #[test]

@@ -3855,6 +3855,9 @@ impl Workspace {
                 self.rendered_global_meter_segments = global_segments;
                 ctx.notify();
             }
+            if matches!(event, CLIAgentSessionsModelEvent::MetersUpdated { .. }) {
+                self.notify_plan_quota_alerts(ctx);
+            }
         }
 
         if matches!(
@@ -21523,6 +21526,36 @@ impl Workspace {
                 .with_margin_left(TAB_BAR_PADDING_LEFT)
                 .finish(),
         )
+    }
+
+    /// Sends a desktop notification for each plan limit (session or week) that just crossed the
+    /// warning or the nearly-exhausted threshold. The sessions model hands every alert out once, so
+    /// a limit notifies a single time per threshold and window even with several windows open.
+    fn notify_plan_quota_alerts(&mut self, ctx: &mut ViewContext<Self>) {
+        if !meters_ui::meters_enabled(ctx) || !*TabSettings::as_ref(ctx).show_account_usage_chip {
+            return;
+        }
+        let now = now_epoch_secs();
+        let alerts = CLIAgentSessionsModel::handle(ctx)
+            .update(ctx, |sessions, _| sessions.take_quota_alerts(now));
+        if alerts.is_empty() {
+            return;
+        }
+        let plan = crate::terminal::cli_agent_sessions::plan::current_plan();
+        let play_sound = SessionSettings::as_ref(ctx)
+            .notifications
+            .play_notification_sound;
+        for alert in alerts {
+            let (title, body) = meters_ui::quota_alert_texts(&alert, plan.as_ref(), now);
+            ctx.send_desktop_notification(
+                // Shown even while the app is focused: the point is to see it while working.
+                UserNotification::new_with_sound(title, body, None, play_sound)
+                    .with_show_while_app_active(true),
+                |_, notification_error, _| {
+                    log::warn!("No se pudo enviar el aviso de cupo del plan: {notification_error:?}");
+                },
+            );
+        }
     }
 
     /// Renders the global plan chip shown in the top bar beside the search: the name of the Claude
