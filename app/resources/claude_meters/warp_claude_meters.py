@@ -42,6 +42,8 @@ import time
 PROTOCOL_VERSION = 1
 SENTINEL = "warp://cli-agent"
 MAX_TEXT = 300
+# Length of the reply summary shown in the "finished" desktop notification.
+MAX_REPLY_SUMMARY = 100
 MAX_SEEN_IDS = 500
 CHAIN_TIMEOUT_SECS = 5
 # Bounds the work of one invocation on a long transcript; the rest is read on later ones.
@@ -86,6 +88,17 @@ def lifecycle_enabled():
     if forced in ("0", "1"):
         return forced == "1"
     return not official_plugin_installed()
+
+
+def reply_summary(message, limit=MAX_REPLY_SUMMARY):
+    """First non-empty line of the assistant's reply, cut to `limit` characters."""
+    if not isinstance(message, str):
+        return None
+    for line in message.splitlines():
+        line = re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", line).strip()
+        if line:
+            return line[:limit] + "..." if len(line) > limit else line
+    return None
 
 
 def clip(text, limit=MAX_TEXT):
@@ -534,6 +547,10 @@ def run_hook():
         # Warp replaces the session's prompt with the one on `stop`; resend it so the tab title
         # keeps showing what the agent worked on.
         payload = {"event": "stop", "query": recall_prompt(data.get("session_id"))}
+        # Body of Warp's "finished" desktop notification: how the reply starts.
+        summary = reply_summary(data.get("last_assistant_message"))
+        if summary:
+            payload["response"] = summary
 
     if payload is None:
         return
